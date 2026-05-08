@@ -26,14 +26,14 @@ let found = re.is_match(b"the cat and the dog").unwrap();
 
 ## Syntax extensions
 
-RE# supports standard regex syntax plus three extensions: `_` (universal wildcard), `&` (intersection), and `~(...)` (complement). `_` matches any character including newlines, so `_*` means "any string".
+RE# supports standard regex syntax plus three extensions: `_` (any byte incl. newline), `&` (intersection), and `~(...)` (complement). `_` matches any byte, so `_*` means "any string".
 
 ```perl
-_*              any string
-a_*             any string that starts with 'a'
-_*a             any string that ends with 'a'
-_*a_*           any string that contains 'a'
-~(_*a_*)        any string that does NOT contain 'a'
+_*                any string
+a_*               any string that starts with 'a'
+_*a               any string that ends with 'a'
+_*a_*             any string that contains 'a'
+~(_*a_*)          any string that does NOT contain 'a'
 (_*a_*)&~(_*b_*)  contains 'a' AND does not contain 'b'
 (?<=b)_*&_*(?=a)  preceded by 'b' AND followed by 'a'
 ```
@@ -54,14 +54,16 @@ RE# is designed around `is_match` and `find_all`. It doesn't provide `find` or `
 
 > **Leftmost-longest, not leftmost-greedy (PCRE).** `y|yes|n|no` on `"yes please"` matches `yes` in RE#, `y` in PCRE / `regex`. Alternation order doesn't matter.
 
+> **Multiline is on by default.** `^` and `$` default to start/end of **line**. Disable with `(?-m)` or `RegexOptions::multi_line(false)` to make them start/end of input.
+
 Matching returns `Result<Vec<Match>, Error>`. capacity or lookahead overflow will fail outright rather than silently degrade. `RegexOptions` controls precompilation threshold, capacity, and lookahead context:
 
 ```rust
 let opts = resharp::RegexOptions {
-    dfa_threshold: 0,             // eagerly compile up to N states (default: 0 = fully lazy)
-    max_dfa_capacity: 65535,       // max automata states (default: u16::MAX)
-    lookahead_context_max: 800,    // max lookahead context distance (default: 800)
-    hardened: false,               // slower in the average case but truly linear all matches
+    max_dfa_capacity: 65535,    // max automata states (default: u16::MAX)
+    lookahead_context_max: 800, // max lookahead context distance (default: 800)
+    hardened: false,            // ~10x slower on avg. but linear for **all matches**
+    unicode: resharp::UnicodeMode::Default, // Ascii | Default | Full | Javascript
     ..Default::default()
 };
 let re = resharp::Regex::with_options(r"pattern", opts).unwrap();

@@ -1,6 +1,10 @@
 description = '''
 tests for auto-hardening heuristic
 '''
+[[test]]
+pattern = '\[[^\]]*\]'
+hardened = false
+fwd = false
 
 [[test]]
 pattern = '[\s\S]+<Token>([^<]+)<\/Token>[\s\S]+'

@@ -1,4 +1,4 @@
-pub use crate::simd::RevPrefixSearch;
+pub use crate::simd::RevTeddySearch;
 pub use crate::simd::TSet;
 
 pub enum MintermSearchValue {

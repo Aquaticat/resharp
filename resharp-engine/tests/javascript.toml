@@ -3,16 +3,17 @@ javascript unicode mode tests. all tests run with UnicodeMode::Javascript.
 '''
 
 [[test]]
-name = "whenever_js_prefix"
-pattern = '^(?:WHENEVER\b)'
-input = "WHENEVER you look at this pattern"
-matches = [[0, 8]]
-
-[[test]]
 name = "trailing_la_dot_alt_eol"
 pattern = '.(?=a|$)'
 input = "xa xb x\nxc x"
 matches = [[0, 1], [6, 7], [11, 12]]
+
+
+[[test]]
+name = "whenever_js_prefix"
+pattern = '^(?:WHENEVER\b)'
+input = "WHENEVER you look at this pattern"
+matches = [[0, 8]]
 
 [[test]]
 name = "trailing_la_word_alt_eol"

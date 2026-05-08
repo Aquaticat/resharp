@@ -238,9 +238,14 @@ unsafe fn scan_chunk_bytes<const N: usize>(chunk: v128, v: &[v128; 3]) -> v128 {
 }
 
 #[inline(always)]
-unsafe fn scan_chunk_ranges<const N: usize>(chunk: v128, lo: &[v128; 3], hi: &[v128; 3]) -> v128 {
+unsafe fn scan_chunk_ranges<const N: usize>(chunk: v128, lo: &[v128; 4], hi: &[v128; 4]) -> v128 {
     let in0 = v128_and(u8x16_ge(chunk, lo[0]), u8x16_le(chunk, hi[0]));
-    if N >= 3 {
+    if N >= 4 {
+        let in1 = v128_and(u8x16_ge(chunk, lo[1]), u8x16_le(chunk, hi[1]));
+        let in2 = v128_and(u8x16_ge(chunk, lo[2]), u8x16_le(chunk, hi[2]));
+        let in3 = v128_and(u8x16_ge(chunk, lo[3]), u8x16_le(chunk, hi[3]));
+        v128_or(v128_or(in0, in1), v128_or(in2, in3))
+    } else if N >= 3 {
         let in1 = v128_and(u8x16_ge(chunk, lo[1]), u8x16_le(chunk, hi[1]));
         let in2 = v128_and(u8x16_ge(chunk, lo[2]), u8x16_le(chunk, hi[2]));
         v128_or(in0, v128_or(in1, in2))
@@ -357,7 +362,7 @@ pub struct RevSearchRanges {
 
 impl RevSearchRanges {
     pub fn new(ranges: Vec<(u8, u8)>) -> Self {
-        debug_assert!(!ranges.is_empty() && ranges.len() <= 3);
+        debug_assert!(!ranges.is_empty() && ranges.len() <= 4);
         Self { ranges }
     }
 
@@ -379,16 +384,19 @@ impl RevSearchRanges {
             u8x16_splat(self.ranges[0].0),
             u8x16_splat(self.ranges[if n >= 2 { 1 } else { 0 }].0),
             u8x16_splat(self.ranges[if n >= 3 { 2 } else { 0 }].0),
+            u8x16_splat(self.ranges[if n >= 4 { 3 } else { 0 }].0),
         ];
         let hi = [
             u8x16_splat(self.ranges[0].1),
             u8x16_splat(self.ranges[if n >= 2 { 1 } else { 0 }].1),
             u8x16_splat(self.ranges[if n >= 3 { 2 } else { 0 }].1),
+            u8x16_splat(self.ranges[if n >= 4 { 3 } else { 0 }].1),
         ];
         match n {
             1 => linear_scan::<FWD>(haystack, |c| scan_chunk_ranges::<1>(c, &lo, &hi)),
             2 => linear_scan::<FWD>(haystack, |c| scan_chunk_ranges::<2>(c, &lo, &hi)),
-            _ => linear_scan::<FWD>(haystack, |c| scan_chunk_ranges::<3>(c, &lo, &hi)),
+            3 => linear_scan::<FWD>(haystack, |c| scan_chunk_ranges::<3>(c, &lo, &hi)),
+            _ => linear_scan::<FWD>(haystack, |c| scan_chunk_ranges::<4>(c, &lo, &hi)),
         }
     }
 }
@@ -486,15 +494,24 @@ impl FwdRangeSearch {
 }
 
 #[cfg_attr(debug_assertions, derive(Debug))]
-pub struct RevPrefixSearch {
+struct RevTeddyInner {
     len: usize,
     num_simd: usize,
     masks: Box<TeddyMasks>,
-    pub(crate) sets: Vec<TSet>,
+    sets: Vec<TSet>,
     tail_offset: usize,
 }
 
-impl RevPrefixSearch {
+enum RevSearchInner {
+    Teddy(RevTeddyInner),
+    Literal(super::RevLiteralInner),
+}
+
+pub struct RevTeddySearch {
+    inner: RevSearchInner,
+}
+
+impl RevTeddySearch {
     pub fn new(
         len: usize,
         byte_sets_raw: &[Vec<u8>],
@@ -503,6 +520,14 @@ impl RevPrefixSearch {
     ) -> Self {
         debug_assert_eq!(all_sets.len(), len);
         debug_assert_eq!(byte_sets_raw.len(), len);
+
+        if byte_sets_raw.iter().all(|bs| bs.len() == 1) {
+            let needle: Vec<u8> = byte_sets_raw.iter().rev().map(|bs| bs[0]).collect();
+            return Self {
+                inner: RevSearchInner::Literal(super::RevLiteralInner::new(needle, tail_offset)),
+            };
+        }
+
         let num_simd = len.min(3);
         let mut masks = Box::new(TeddyMasks {
             lo: [[0u8; 32]; 3],
@@ -521,56 +546,79 @@ impl RevPrefixSearch {
             masks.hi[i][16..].copy_from_slice(&hi);
         }
         Self {
-            len,
-            num_simd,
-            masks,
-            sets: all_sets,
-            tail_offset,
+            inner: RevSearchInner::Teddy(RevTeddyInner {
+                len,
+                num_simd,
+                masks,
+                sets: all_sets,
+                tail_offset,
+            }),
         }
     }
 
     pub fn add_tail_offset(mut self, extra: u32) -> Self {
-        self.tail_offset += extra as usize;
+        match &mut self.inner {
+            RevSearchInner::Teddy(t) => t.tail_offset += extra as usize,
+            RevSearchInner::Literal(l) => l.tail_offset += extra as usize,
+        }
         self
     }
 
     #[allow(dead_code)]
     pub fn len(&self) -> usize {
-        self.len
+        match &self.inner {
+            RevSearchInner::Teddy(t) => t.len,
+            RevSearchInner::Literal(l) => l.len(),
+        }
     }
 
     pub fn find_rev(&self, haystack: &[u8], end: usize) -> Option<usize> {
-        let end = end.min(haystack.len().saturating_sub(1));
-        let end = end.checked_sub(self.tail_offset)?;
-        let r = unsafe {
-            match self.num_simd {
-                1 => self.teddy_rev::<1>(haystack, end),
-                2 => self.teddy_rev::<2>(haystack, end),
-                _ => self.teddy_rev::<3>(haystack, end),
+        match &self.inner {
+            RevSearchInner::Teddy(t) => {
+                let end = end.min(haystack.len().saturating_sub(1));
+                let end = match end.checked_sub(t.tail_offset) {
+                    Some(e) => e,
+                    None => return None,
+                };
+                let r = unsafe {
+                    match t.num_simd {
+                        1 => Self::teddy_rev::<1>(t, haystack, end),
+                        2 => Self::teddy_rev::<2>(t, haystack, end),
+                        _ => Self::teddy_rev::<3>(t, haystack, end),
+                    }
+                };
+                r.map(|p| p + t.tail_offset)
             }
-        };
-        r.map(|p| p + self.tail_offset)
+            RevSearchInner::Literal(l) => {
+                let end = end.min(haystack.len().saturating_sub(1));
+                let end = match end.checked_sub(l.tail_offset) {
+                    Some(e) => e,
+                    None => return None,
+                };
+                l.find_rev(haystack, end).map(|p| p + l.tail_offset)
+            }
+        }
     }
 
-    unsafe fn teddy_rev<const N: usize>(&self, haystack: &[u8], end: usize) -> Option<usize> {
+    unsafe fn teddy_rev<const N: usize>(t: &RevTeddyInner, haystack: &[u8], end: usize) -> Option<usize> {
         let ptr = haystack.as_ptr();
         let nib = u8x16_splat(0x0F);
         let masks_lo = [
-            v128_load(self.masks.lo[0].as_ptr() as *const v128),
-            v128_load(self.masks.lo[1].as_ptr() as *const v128),
-            v128_load(self.masks.lo[2].as_ptr() as *const v128),
+            v128_load(t.masks.lo[0].as_ptr() as *const v128),
+            v128_load(t.masks.lo[1].as_ptr() as *const v128),
+            v128_load(t.masks.lo[2].as_ptr() as *const v128),
         ];
         let masks_hi = [
-            v128_load(self.masks.hi[0].as_ptr() as *const v128),
-            v128_load(self.masks.hi[1].as_ptr() as *const v128),
-            v128_load(self.masks.hi[2].as_ptr() as *const v128),
+            v128_load(t.masks.hi[0].as_ptr() as *const v128),
+            v128_load(t.masks.hi[1].as_ptr() as *const v128),
+            v128_load(t.masks.hi[2].as_ptr() as *const v128),
         ];
-        let sets_ptr = self.sets.as_ptr();
-        let len = self.len;
+        let sets_ptr = t.sets.as_ptr();
+        let len = t.len;
         let min_pos = len - 1;
 
         if end < 15 + min_pos {
-            return self.verify_tail(haystack, end);
+            return Self::verify_tail_teddy(t, haystack, end);
         }
         let mut chunk_pos = end - 15;
 
@@ -587,18 +635,18 @@ impl RevPrefixSearch {
             }
             chunk_pos -= 16;
         }
-        self.verify_tail(haystack, chunk_pos.saturating_sub(1).min(end))
+        Self::verify_tail_teddy(t, haystack, chunk_pos.saturating_sub(1).min(end))
     }
 
-    fn verify_tail(&self, haystack: &[u8], end: usize) -> Option<usize> {
-        let min_pos = self.len - 1;
+    fn verify_tail_teddy(t: &RevTeddyInner, haystack: &[u8], end: usize) -> Option<usize> {
+        let min_pos = t.len - 1;
         let mut pos = end;
         'outer: loop {
             if pos < min_pos {
                 return None;
             }
-            for i in 0..self.len {
-                if !self.sets[i].contains_byte(haystack[pos - i]) {
+            for i in 0..t.len {
+                if !t.sets[i].contains_byte(haystack[pos - i]) {
                     if pos == min_pos {
                         return None;
                     }

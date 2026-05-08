@@ -33,18 +33,26 @@ pub struct PatternFlags {
     pub case_insensitive: bool,
     /// `.` matches `\n` (behaves like `_`).
     pub dot_matches_new_line: bool,
+    /// `^` and `$` match at line boundaries (`\n`) in addition to text boundaries.
+    pub multiline: bool,
     /// allow whitespace and `#` comments in the pattern.
     pub ignore_whitespace: bool,
     /// ASCII `\w`/`\d`/`\s` tables, but
     /// negated perl classes (`\W`/`\D`/`\S`) and `.` match a full codepoint
     pub ascii_perl_classes: bool,
+    /// max upper bound on `expanded_ast_size` before parser rejects the
+    /// pattern as too complex. default 50_000.
+    pub expanded_ast_limit: u64,
+    /// max children allowed in any single `Concat`/`Alternation`/
+    /// `Intersection` node. default 4_000.
+    pub max_list_len: usize,
 }
 
 // arbitrary safeguards, these will not prevent intentional DoS patterns
 // more to protect you from shooting yourself in the foot
 const REPETITION_COUNT_LIMIT: u32 = 2_000;
-const EXPANDED_AST_LIMIT: u64 = 50_000;
-const MAX_LIST_LEN: usize = 4_000;
+pub const DEFAULT_EXPANDED_AST_LIMIT: u64 = 50_000;
+pub const DEFAULT_MAX_LIST_LEN: usize = 4_000;
 
 impl Default for PatternFlags {
     fn default() -> Self {
@@ -53,8 +61,11 @@ impl Default for PatternFlags {
             full_unicode: false,
             case_insensitive: false,
             dot_matches_new_line: false,
+            multiline: true,
             ignore_whitespace: false,
             ascii_perl_classes: false,
+            expanded_ast_limit: DEFAULT_EXPANDED_AST_LIMIT,
+            max_list_len: DEFAULT_MAX_LIST_LEN,
         }
     }
 }
@@ -199,10 +210,13 @@ pub struct ResharpParser<'s> {
     empty_min_range: bool,
     ignore_whitespace: Cell<bool>,
     dot_all: Cell<bool>,
+    multiline: Cell<bool>,
     global_unicode: bool,
     global_full_unicode: bool,
     global_ascii_perl: bool,
     global_case_insensitive: bool,
+    expanded_ast_limit: u64,
+    max_list_len: usize,
     comments: RefCell<Vec<ast::Comment>>,
     stack_group: RefCell<Vec<GroupState>>,
     stack_class: RefCell<Vec<ClassState>>,
@@ -321,10 +335,13 @@ impl<'s> ResharpParser<'s> {
             empty_min_range: false,
             ignore_whitespace: Cell::new(flags.ignore_whitespace),
             dot_all: Cell::new(flags.dot_matches_new_line),
+            multiline: Cell::new(flags.multiline),
             global_unicode: flags.unicode || flags.full_unicode || flags.ascii_perl_classes,
             global_full_unicode: flags.full_unicode,
             global_ascii_perl: flags.ascii_perl_classes,
             global_case_insensitive: flags.case_insensitive,
+            expanded_ast_limit: flags.expanded_ast_limit,
+            max_list_len: flags.max_list_len,
             comments: RefCell::new(vec![]),
             stack_group: RefCell::new(vec![]),
             stack_class: RefCell::new(vec![]),
@@ -1374,6 +1391,9 @@ impl<'s> ResharpParser<'s> {
                 if let Some(state) = f.flags.flag_state(ast::Flag::DotMatchesNewLine) {
                     self.dot_all.set(state);
                 }
+                if let Some(state) = f.flags.flag_state(ast::Flag::MultiLine) {
+                    self.multiline.set(state);
+                }
                 let concat_translator = Some(translator_builder.build());
                 *translator = concat_translator;
                 Ok(NodeId::EPS)
@@ -1403,12 +1423,18 @@ impl<'s> ResharpParser<'s> {
                     Err(self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex))
                 }
                 ast::AssertionKind::StartLine => {
+                    if !self.multiline.get() {
+                        return Ok(NodeId::BEGIN);
+                    }
                     let left = NodeId::BEGIN;
                     let right = tb.mk_u8(b'\n');
                     let union = tb.mk_union(left, right);
                     Ok(tb.mk_lookbehind(union, NodeId::MISSING))
                 }
                 ast::AssertionKind::EndLine => {
+                    if !self.multiline.get() {
+                        return Ok(NodeId::END);
+                    }
                     let left = NodeId::END;
                     let right = tb.mk_u8(b'\n');
                     let union = tb.mk_union(left, right);
@@ -1544,9 +1570,14 @@ impl<'s> ResharpParser<'s> {
                         if let Some(state) = flags.flag_state(ast::Flag::DotMatchesNewLine) {
                             self.dot_all.set(state);
                         }
+                        let saved_multiline = self.multiline.get();
+                        if let Some(state) = flags.flag_state(ast::Flag::MultiLine) {
+                            self.multiline.set(state);
+                        }
                         let mut scoped = Some(translator_builder.build());
                         let result = self.ast_to_node_id(&g.ast, &mut scoped, tb);
                         self.dot_all.set(saved_dot_all);
+                        self.multiline.set(saved_multiline);
                         return result;
                     }
                 }
@@ -1584,6 +1615,9 @@ impl<'s> ResharpParser<'s> {
                             }
                             if let Some(state) = f.flags.flag_state(ast::Flag::DotMatchesNewLine) {
                                 self.dot_all.set(state);
+                            }
+                            if let Some(state) = f.flags.flag_state(ast::Flag::MultiLine) {
+                                self.multiline.set(state);
                             }
                             concat_translator = Some(translator_builder.build());
                             *translator = concat_translator.clone();
@@ -1669,8 +1703,8 @@ impl<'s> ResharpParser<'s> {
             }
         }
         let ast = self.pop_group_end(concat)?;
-        if expanded_ast_size(&ast, EXPANDED_AST_LIMIT) >= EXPANDED_AST_LIMIT
-            || max_list_length(&ast) >= MAX_LIST_LEN
+        if expanded_ast_size(&ast, self.expanded_ast_limit) >= self.expanded_ast_limit
+            || max_concat_length(&ast) >= self.max_list_len
         {
             return Err(self.error(*ast.span(), ast::ErrorKind::UnsupportedResharpRegex));
         }
@@ -2641,7 +2675,7 @@ fn is_universal_perl_pair(item: &regex_syntax::ast::ClassSetItem) -> bool {
     }
 }
 
-pub fn max_list_length(ast: &ast::Ast) -> usize {
+pub fn max_concat_length(ast: &ast::Ast) -> usize {
     match ast {
         ast::Ast::Empty(_)
         | ast::Ast::Flags(_)
@@ -2652,22 +2686,16 @@ pub fn max_list_length(ast: &ast::Ast) -> usize {
         | ast::Ast::ClassUnicode(_)
         | ast::Ast::ClassPerl(_)
         | ast::Ast::ClassBracketed(_) => 0,
-        ast::Ast::Group(g) => max_list_length(&g.ast),
-        ast::Ast::Complement(c) => max_list_length(&c.ast),
-        ast::Ast::Lookaround(l) => max_list_length(&l.ast),
-        ast::Ast::Repetition(r) => max_list_length(&r.ast),
+        ast::Ast::Group(g) => max_concat_length(&g.ast),
+        ast::Ast::Complement(c) => max_concat_length(&c.ast),
+        ast::Ast::Lookaround(l) => max_concat_length(&l.ast),
+        ast::Ast::Repetition(r) => max_concat_length(&r.ast),
         ast::Ast::Concat(c) => c
             .asts
             .len()
-            .max(c.asts.iter().map(max_list_length).max().unwrap_or(0)),
-        ast::Ast::Alternation(a) => a
-            .asts
-            .len()
-            .max(a.asts.iter().map(max_list_length).max().unwrap_or(0)),
-        ast::Ast::Intersection(i) => i
-            .asts
-            .len()
-            .max(i.asts.iter().map(max_list_length).max().unwrap_or(0)),
+            .max(c.asts.iter().map(max_concat_length).max().unwrap_or(0)),
+        ast::Ast::Alternation(a) => a.asts.iter().map(max_concat_length).max().unwrap_or(0),
+        ast::Ast::Intersection(i) => i.asts.iter().map(max_concat_length).max().unwrap_or(0),
     }
 }
 

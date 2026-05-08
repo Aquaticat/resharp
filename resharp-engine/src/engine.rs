@@ -7,16 +7,14 @@ use resharp_algebra::solver::{Solver, TSetId};
 use resharp_algebra::{Kind, NodeId, RegexBuilder, TRegex, TRegexId};
 
 use crate::accel::MintermSearchValue;
-use crate::prefix::{calc_potential_start, calc_prefix_sets_inner};
 use crate::{Error, Match};
 
 pub const NO_MATCH: usize = usize::MAX;
 pub const DFA_MISSING: u16 = 0;
 pub const DFA_DEAD: u16 = 1;
 pub const DFA_INITIAL: u16 = 2;
-#[allow(non_upper_case_globals)]
 
-struct PartitionTree {
+pub(crate) struct PartitionTree {
     sets: Vec<TSetId>,
     lefts: Vec<u32>,
     rights: Vec<u32>,
@@ -173,7 +171,6 @@ pub(crate) fn collect_tregex_leaves(b: &RegexBuilder, tregex: TRegexId, out: &mu
 }
 
 const SKIP_FREQ_THRESHOLD: u32 = 75_000;
-const RARE_BYTE_FREQ_LIMIT: u16 = 25_000;
 
 fn skip_is_profitable(bytes: &[u8]) -> bool {
     if bytes.len() >= 256 {
@@ -210,7 +207,7 @@ pub struct LDFA {
     pub node_to_state: HashMap<NodeId, u16>,
     pub skip_ids: Vec<u8>,
     pub skip_searchers: Vec<MintermSearchValue>,
-    pub prefix_skip: Option<crate::accel::RevPrefixSearch>,
+    pub prefix_skip: Option<crate::accel::RevTeddySearch>,
     pub max_capacity: usize,
     pub is_forward: bool,
     pub has_anchors: bool,
@@ -263,7 +260,7 @@ impl LDFA {
         );
 
         // state 3
-        let initial_pruned = b.prune_begin_eps(initial);
+        let initial_pruned = b.prune_begin(initial);
 
         let pruned_sid = register_state(
             &mut state_nodes,
@@ -404,6 +401,7 @@ impl LDFA {
         Ok(self.center_table[delta])
     }
 
+    #[allow(dead_code)]
     pub fn precompile(&mut self, b: &mut RegexBuilder, threshold: usize) -> bool {
         use std::collections::VecDeque;
         let mut worklist: VecDeque<u16> = VecDeque::new();
@@ -571,6 +569,7 @@ impl LDFA {
         if node == NodeId::MISSING || node == NodeId::BOT {
             return;
         }
+
         let sder = match b.der(node, Nullability::CENTER) {
             Ok(d) => d,
             Err(_) => return,
@@ -608,7 +607,7 @@ impl LDFA {
     fn try_build_range_skip(&mut self, bytes: &[u8]) -> Option<u8> {
         let tset = crate::accel::TSet::from_bytes(bytes);
         let ranges: Vec<(u8, u8)> = Solver::pp_collect_ranges(&tset).into_iter().collect();
-        if ranges.is_empty() || ranges.len() > 3 {
+        if ranges.is_empty() || ranges.len() > 4 {
             return None;
         }
         if !skip_is_profitable(bytes) {
@@ -754,7 +753,7 @@ impl LDFA {
     fn dispatch_collect_rev<const EARLY_EXIT: bool, const INITIAL_SKIP: bool>(
         &self,
         tables: &ScanTables,
-        prefix_ptr: *const crate::accel::RevPrefixSearch,
+        prefix_ptr: *const crate::accel::RevTeddySearch,
         curr: u32,
         pos: usize,
         data: &[u8],
@@ -1062,6 +1061,85 @@ impl LDFA {
         Ok(state as u32)
     }
 
+    /// Advance the DFA from `state`/`pos_begin` until a CENTER-nullable state or end of input.
+    /// Returns `(state, pos, hit_null)`: `hit_null=true` means CENTER-nullable (verify with
+    /// `has_any_null`); `hit_null=false` means either DFA_DEAD or input exhausted.
+    pub(crate) fn scan_fwd_first_null_from(
+        &mut self,
+        b: &mut RegexBuilder,
+        state: u32,
+        pos_begin: usize,
+        data: &[u8],
+    ) -> Result<(u32, usize, bool), Error> {
+        if state <= DFA_DEAD as u32 {
+            return Ok((state, pos_begin, false));
+        }
+        if has_any_null(&self.effects_id, &self.effects, state, Nullability::CENTER) {
+            return Ok((state, pos_begin, true));
+        }
+        let end = data.len();
+        let mut pos = pos_begin;
+        let mut curr = state;
+        if pos >= end {
+            return Ok((curr, pos, false));
+        }
+        loop {
+            let tables = self.scan_tables(data);
+            let (state_out, new_pos, hit_null, cache_miss) =
+                self.dispatch_scan_fwd_first_null(&tables, curr, pos, end);
+            if hit_null {
+                return Ok((state_out, new_pos, true));
+            }
+            if !cache_miss {
+                return Ok((state_out, new_pos, false));
+            }
+            let mt = self.mt_lookup[data[new_pos] as usize] as u32;
+            curr = self.lazy_transition(b, state_out as u16, mt)? as u32;
+            pos = new_pos + 1;
+            if curr <= DFA_DEAD as u32 {
+                return Ok((curr, pos, false));
+            }
+            self.create_state(b, curr as u16).ok();
+            if has_any_null(&self.effects_id, &self.effects, curr, Nullability::CENTER) {
+                return Ok((curr, pos, true));
+            }
+            if pos >= end {
+                return Ok((curr, pos, false));
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn dispatch_scan_fwd_first_null(
+        &self,
+        tables: &ScanTables,
+        curr: u32,
+        pos: usize,
+        end: usize,
+    ) -> (u32, usize, bool, bool) {
+        if self.can_skip() {
+            scan_fwd_first_null::<true>(
+                tables,
+                self.effects_id.as_ptr(),
+                &self.skip_ids,
+                &self.skip_searchers,
+                curr,
+                pos,
+                end,
+            )
+        } else {
+            scan_fwd_first_null::<false>(
+                tables,
+                self.effects_id.as_ptr(),
+                &[],
+                &[],
+                curr,
+                pos,
+                end,
+            )
+        }
+    }
+
     /// scan forward from a state and pos
     pub fn scan_fwd_from(
         &mut self,
@@ -1279,7 +1357,7 @@ impl LDFA {
         if let Some(preskip) = self.prefix_skip.as_ref() {
             return self.collect_rev_prefix::<EARLY_EXIT>(
                 b,
-                preskip as *const crate::accel::RevPrefixSearch,
+                preskip as *const crate::accel::RevTeddySearch,
                 start_pos,
                 curr,
                 data,
@@ -1358,7 +1436,7 @@ impl LDFA {
     fn collect_rev_prefix<const EARLY_EXIT: bool>(
         &mut self,
         b: &mut RegexBuilder,
-        prefix_ptr: *const crate::accel::RevPrefixSearch,
+        prefix_ptr: *const crate::accel::RevTeddySearch,
         start_pos: usize,
         start_state: u32,
         data: &[u8],
@@ -1588,6 +1666,18 @@ fn collect_max<const REV: bool>(
 }
 
 #[inline(always)]
+pub(crate) fn collect_max_fwd_pub(
+    effects_id: &[u16],
+    effects: &[Vec<NullState>],
+    state: u32,
+    pos: usize,
+    mask: Nullability,
+    best: &mut usize,
+) {
+    collect_max::<false>(effects_id, effects, state, pos, mask, best);
+}
+
+#[inline(always)]
 fn collect_max_fwd(
     effects_id: &[u16],
     effects: &[Vec<NullState>],
@@ -1600,7 +1690,7 @@ fn collect_max_fwd(
 }
 
 #[inline(always)]
-fn collect_max_rev(
+pub(crate) fn collect_max_rev(
     effects_id: &[u16],
     effects: &[Vec<NullState>],
     state: u32,
@@ -1616,7 +1706,7 @@ fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool, const INITIAL_SKIP: boo
     t: &ScanTables,
     skip_ids: &[u8],
     skip_searchers: &[MintermSearchValue],
-    prefix_ptr: *const crate::accel::RevPrefixSearch,
+    prefix_ptr: *const crate::accel::RevTeddySearch,
     mut curr: u32,
     mut pos: usize,
     data: &[u8],
@@ -1855,6 +1945,68 @@ fn scan_fwd_verify<const SKIP: bool>(
     (curr, pos, max_end, false)
 }
 
+/// Like `scan_fwd_verify` but stops at the first potentially CENTER-nullable state.
+/// Class skip is safe: self-looping non-nullable states produce identical transitions.
+#[inline(never)]
+fn scan_fwd_first_null<const SKIP: bool>(
+    t: &ScanTables,
+    effects_id: *const u16,
+    skip_ids: &[u8],
+    skip_searchers: &[MintermSearchValue],
+    mut curr: u32,
+    mut pos: usize,
+    end: usize,
+) -> (u32, usize, bool, bool) {
+    let center_table = t.center_table;
+    let data = t.data;
+    let minterms_lookup = t.minterms_lookup;
+    let mt_log = t.mt_log;
+
+    'outer: while pos < end {
+        if SKIP {
+            let sid = skip_ids[curr as usize];
+            if sid != 0 {
+                let searcher = &skip_searchers[sid as usize - 1];
+                let haystack = unsafe { std::slice::from_raw_parts(data.add(pos), end - pos) };
+                match searcher.find_fwd(haystack) {
+                    Some(offset) => {
+                        pos += offset;
+                    }
+                    None => {
+                        return (curr, end, false, false);
+                    }
+                }
+            }
+        }
+        while pos < end {
+            unsafe {
+                let mt = *minterms_lookup.add(*data.add(pos) as usize) as u32;
+                let delta = (curr << mt_log | mt) as usize;
+                let next = *center_table.add(delta);
+                if next == DFA_MISSING {
+                    return (curr, pos, false, true);
+                }
+                if next == DFA_DEAD {
+                    return (DFA_DEAD as u32, pos, false, false);
+                }
+                curr = next as u32;
+            }
+            pos += 1;
+            let eid = unsafe { *effects_id.add(curr as usize) as u32 };
+            if eid != 0 && eid != EID_BEGIN0 && eid != EID_END0 {
+                return (curr, pos, true, false);
+            }
+            if SKIP && skip_ids[curr as usize] != 0 {
+                continue 'outer;
+            }
+        }
+        if !SKIP {
+            break;
+        }
+    }
+    (curr, pos, false, false)
+}
+
 #[inline(never)]
 fn scan_fwd<const SKIP: bool>(
     t: &ScanTables,
@@ -1960,387 +2112,4 @@ fn register_state(
         effects.push(b.nulls_entry_vec(effects.len() as u32));
     }
     sid
-}
-
-/// bounded DFA for opportunistic matching with known max_length.
-/// only exists for a slight (20-30%) performance boost on short patterns
-/// when two DFAs arent necessary
-/// this is basically derivative based Aho-Corasick
-pub(crate) struct BDFA {
-    initial_node: NodeId,
-    /// states as Counted node chains.
-    pub states: Vec<NodeId>,
-    state_map: HashMap<NodeId, u16>,
-    /// packed transition table: entry = (match_rel << 16) | next_state.
-    /// 0 = uncached sentinel.
-    pub table: Vec<u32>,
-    /// match start rel per state: step (0 = no match).
-    pub match_rel: Vec<u32>,
-    /// match end offset per state: step - best (distance from pos to match end).
-    pub match_end_off: Vec<u32>,
-    /// log2 of minterm stride.
-    pub mt_log: u32,
-    minterms: Vec<TSetId>,
-    /// byte -> minterm index.
-    pub minterms_lookup: [u8; 256],
-    /// initial state id.
-    pub initial: u16,
-    /// SIMD prefix search.
-    pub prefix: Option<crate::accel::FwdPrefixSearch>,
-    /// prefix length in bytes.
-    pub prefix_len: usize,
-    /// state after transitioning through the prefix.
-    pub after_prefix: u16,
-}
-
-impl BDFA {
-    /// construct from a pattern node.
-    pub fn new(b: &mut RegexBuilder, pattern_node: NodeId) -> Result<Self, Error> {
-        let initial_node = b.mk_counted(pattern_node, NodeId::MISSING, 0);
-        let sets = collect_sets(b, initial_node);
-        let minterms = PartitionTree::generate_minterms(sets, b.solver());
-        let minterms_lookup = PartitionTree::minterms_lookup(&minterms, b.solver());
-        let num_mt = minterms.len();
-        let mt_log = num_mt.next_power_of_two().trailing_zeros();
-        let stride = 1usize << mt_log;
-
-        // state 0 = uncached sentinel (unused), state 1 = MISSING (no active candidates)
-        let mut dfa = BDFA {
-            initial_node,
-            states: vec![NodeId::MISSING, NodeId::MISSING],
-            state_map: HashMap::new(),
-            table: vec![0u32; stride * 2],
-            match_rel: vec![0, 0],
-            match_end_off: vec![0, 0],
-            mt_log,
-            minterms,
-            minterms_lookup,
-            initial: 1,
-            prefix: None,
-            prefix_len: 0,
-            after_prefix: 1,
-        };
-        dfa.state_map.insert(NodeId::MISSING, 1);
-        dfa.build_prefix(b, pattern_node)?;
-        Ok(dfa)
-    }
-
-    fn build_prefix(&mut self, b: &mut RegexBuilder, pattern_node: NodeId) -> Result<(), Error> {
-        if !crate::simd::has_simd() {
-            return Ok(());
-        }
-        let mut prefix_sets = calc_prefix_sets_inner(b, pattern_node, false)?;
-        if prefix_sets.len() > 16 {
-            prefix_sets.truncate(16);
-        }
-        if cfg!(feature = "debug") {
-            let byte_counts: Vec<usize> = prefix_sets
-                .iter()
-                .map(|&s| b.solver_ref().collect_bytes(s).len())
-                .collect();
-            eprintln!(
-                "  [bdfa-build-prefix] linear_sets={} bytes={:?}",
-                prefix_sets.len(),
-                byte_counts
-            );
-        }
-        if prefix_sets.is_empty() {
-            return self.build_prefix_potential(b, pattern_node);
-        }
-
-        let byte_sets_raw: Vec<Vec<u8>> = prefix_sets
-            .iter()
-            .map(|&s| b.solver_ref().collect_bytes(s))
-            .collect();
-
-        if byte_sets_raw.len() < 3 && byte_sets_raw.iter().any(|bs| bs.len() > 1) {
-            return self.build_prefix_potential(b, pattern_node);
-        }
-
-        let search = Self::build_prefix_search(&byte_sets_raw);
-        let search = match search {
-            Some(s) => s,
-            None => return self.build_prefix_potential(b, pattern_node),
-        };
-
-        let mut state = self.initial;
-        for &set in &prefix_sets {
-            let mt_idx = self.minterms.iter().position(|&mt| {
-                let mt_set = b.solver_ref().get_set(mt);
-                let prefix_set = b.solver_ref().get_set(set);
-                Solver::is_sat(&mt_set, &prefix_set)
-            });
-            match mt_idx {
-                Some(idx) => state = (self.transition(b, state, idx)? & 0xFFFF) as u16,
-                None => return Ok(()), // shouldn't happen
-            }
-        }
-
-        self.prefix = Some(search);
-        self.prefix_len = prefix_sets.len();
-        self.after_prefix = state;
-        Ok(())
-    }
-
-    fn build_prefix_potential(
-        &mut self,
-        b: &mut RegexBuilder,
-        pattern_node: NodeId,
-    ) -> Result<(), Error> {
-        let sets = calc_potential_start(b, pattern_node, 16, 64, false)?;
-        if cfg!(feature = "debug") {
-            eprintln!(
-                "  [bdfa-prefix-potential] node={:?} sets={}",
-                pattern_node,
-                sets.len()
-            );
-        }
-        if sets.is_empty() {
-            return Ok(());
-        }
-        let byte_sets_raw: Vec<Vec<u8>> = sets
-            .iter()
-            .map(|&s| b.solver_ref().collect_bytes(s))
-            .collect();
-        if cfg!(feature = "debug") {
-            for (i, bs) in byte_sets_raw.iter().enumerate() {
-                eprintln!("  [bdfa-prefix-potential] pos={} bytes={}", i, bs.len());
-            }
-        }
-        let search = match Self::build_prefix_search(&byte_sets_raw) {
-            Some(s) => s,
-            None => return Ok(()),
-        };
-        self.prefix = Some(search);
-        self.prefix_len = sets.len();
-        Ok(())
-    }
-
-    fn build_prefix_search(byte_sets_raw: &[Vec<u8>]) -> Option<crate::accel::FwdPrefixSearch> {
-        if byte_sets_raw.iter().all(|bs| bs.len() == 1) {
-            let needle: Vec<u8> = byte_sets_raw.iter().map(|bs| bs[0]).collect();
-            let lit = crate::simd::FwdLiteralSearch::new(&needle);
-            if crate::simd::BYTE_FREQ[lit.rare_byte() as usize] >= RARE_BYTE_FREQ_LIMIT {
-                return None;
-            }
-            return Some(crate::accel::FwdPrefixSearch::Literal(lit));
-        }
-
-        let mut freqs: Vec<(usize, u64)> = byte_sets_raw
-            .iter()
-            .enumerate()
-            .map(|(i, bytes)| {
-                let freq: u64 = bytes
-                    .iter()
-                    .map(|&b| crate::simd::BYTE_FREQ[b as usize] as u64)
-                    .sum();
-                (i, freq)
-            })
-            .filter(|&(_, f)| f > 0)
-            .collect();
-        if freqs.is_empty() {
-            return None;
-        }
-        freqs.sort_by_key(|&(_, f)| f);
-
-        let rarest_idx = freqs[0].0;
-        if byte_sets_raw[rarest_idx].len() > 16 {
-            return Self::try_build_range_prefix(byte_sets_raw, rarest_idx);
-        }
-
-        let freq_order: Vec<usize> = freqs.iter().map(|&(i, _)| i).collect();
-        let all_sets: Vec<crate::accel::TSet> = byte_sets_raw
-            .iter()
-            .map(|bytes| crate::accel::TSet::from_bytes(bytes))
-            .collect();
-
-        Some(crate::accel::FwdPrefixSearch::Prefix(
-            crate::simd::FwdPrefixSearch::new(
-                byte_sets_raw.len(),
-                &freq_order,
-                byte_sets_raw,
-                all_sets,
-            ),
-        ))
-    }
-
-    fn try_build_range_prefix(
-        byte_sets_raw: &[Vec<u8>],
-        anchor_pos: usize,
-    ) -> Option<crate::accel::FwdPrefixSearch> {
-        let anchor_bytes = &byte_sets_raw[anchor_pos];
-        let freq_sum: u32 = anchor_bytes
-            .iter()
-            .map(|&b| crate::simd::BYTE_FREQ[b as usize] as u32)
-            .sum();
-        if freq_sum >= crate::prefix::SKIP_FREQ_THRESHOLD {
-            return None;
-        }
-        let tset = crate::accel::TSet::from_bytes(anchor_bytes);
-        let ranges: Vec<(u8, u8)> = Solver::pp_collect_ranges(&tset).into_iter().collect();
-        if ranges.is_empty() || ranges.len() > 3 {
-            return None;
-        }
-        let all_sets: Vec<crate::accel::TSet> = byte_sets_raw
-            .iter()
-            .map(|bytes| crate::accel::TSet::from_bytes(bytes))
-            .collect();
-        if cfg!(feature = "debug") {
-            eprintln!(
-                "  [bdfa-prefix-range] anchor=pos{} ranges={:?} len={}",
-                anchor_pos,
-                ranges,
-                byte_sets_raw.len()
-            );
-        }
-        Some(crate::accel::FwdPrefixSearch::Range(
-            crate::simd::FwdRangeSearch::new(byte_sets_raw.len(), anchor_pos, ranges, all_sets),
-        ))
-    }
-
-    /// best match rel from packed extra.
-    pub fn counted_best(node: NodeId, b: &RegexBuilder) -> u32 {
-        b.get_extra(node) >> 16
-    }
-
-    fn register(&mut self, node: NodeId, b: &RegexBuilder) -> u16 {
-        if let Some(&sid) = self.state_map.get(&node) {
-            return sid;
-        }
-        let sid = self.states.len() as u16;
-        // walk chain to find best match among body=BOT nodes
-        let mut match_step = 0u32;
-        let mut match_best = 0u32;
-        let mut cur = node;
-        while cur.0 > NodeId::BOT.0 {
-            debug_assert_eq!(b.get_kind(cur), Kind::Counted);
-            let body = cur.left(b);
-            if body == NodeId::BOT {
-                let best = Self::counted_best(cur, b);
-                if best > match_best {
-                    let packed = b.get_extra(cur);
-                    match_step = packed & 0xFFFF;
-                    match_best = best;
-                }
-            }
-            cur = cur.right(b);
-        }
-        if cfg!(feature = "debug") {
-            eprintln!(
-                "  [bounded] register state {} node={} step={} best={}",
-                sid,
-                b.pp(node),
-                match_step,
-                match_best,
-            );
-        }
-        self.states.push(node);
-        self.state_map.insert(node, sid);
-        self.match_rel.push(match_step);
-        self.match_end_off.push(match_step - match_best);
-        self.table
-            .resize(self.table.len() + (1usize << self.mt_log), 0u32);
-        sid
-    }
-
-    /// transition from state on minterm. returns packed (rel << 16 | next_state).
-    #[inline(always)]
-    pub fn transition(
-        &mut self,
-        b: &mut RegexBuilder,
-        state: u16,
-        mt_idx: usize,
-    ) -> Result<u32, Error> {
-        let delta = (state as usize) << self.mt_log | mt_idx;
-        let cached = self.table[delta];
-        if cached != 0 {
-            return Ok(cached);
-        }
-        self.transition_slow(b, state, mt_idx)
-    }
-
-    fn derive_chain(b: &mut RegexBuilder, head: NodeId, mt: TSetId) -> Result<Vec<NodeId>, Error> {
-        let mut result = Vec::new();
-        let mut cur = head;
-        while cur.0 > NodeId::BOT.0 {
-            debug_assert_eq!(b.get_kind(cur), Kind::Counted);
-            let chain = cur.right(b);
-            let body = cur.left(b);
-            if body == NodeId::BOT {
-                // skip dead wrappers, keep pending matches
-                if Self::counted_best(cur, b) > 0 {
-                    result.push(cur);
-                }
-                cur = chain;
-                continue;
-            }
-            let der = b.der(cur, Nullability::CENTER).map_err(Error::Algebra)?;
-            let next = transition_term(b, der, mt);
-            if next != NodeId::BOT {
-                result.push(next);
-            }
-            cur = chain;
-        }
-        Ok(result)
-    }
-
-    fn rebuild_chain(b: &mut RegexBuilder, candidates: &[NodeId]) -> NodeId {
-        let mut chain = NodeId::MISSING;
-        for &node in candidates.iter().rev() {
-            let body = node.left(b);
-            let packed = b.get_extra(node);
-            let next = b.mk_counted(body, chain, packed);
-            if next != NodeId::BOT {
-                chain = next;
-            }
-        }
-        chain
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn transition_slow(
-        &mut self,
-        b: &mut RegexBuilder,
-        state: u16,
-        mt_idx: usize,
-    ) -> Result<u32, Error> {
-        let head = self.states[state as usize];
-        let mt = self.minterms[mt_idx];
-
-        let mut candidates = Self::derive_chain(b, head, mt)?;
-
-        let spawn_der = b
-            .der(self.initial_node, Nullability::CENTER)
-            .map_err(Error::Algebra)?;
-        let spawn_next = transition_term(b, spawn_der, mt);
-        if spawn_next != NodeId::BOT && !candidates.contains(&spawn_next) {
-            candidates.push(spawn_next);
-        }
-
-        let new_head = Self::rebuild_chain(b, &candidates);
-        let next_sid = self.register(new_head, b);
-
-        if cfg!(feature = "debug") {
-            eprintln!(
-                "  [bdfa-slow] state={} mt={} head={} candidates=[{}] new_head={} -> sid={}",
-                state,
-                mt_idx,
-                b.pp(head),
-                candidates
-                    .iter()
-                    .map(|n| b.pp(*n))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                b.pp(new_head),
-                next_sid,
-            );
-        }
-
-        let rel = self.match_rel[next_sid as usize];
-        let packed = (rel << 16) | next_sid as u32;
-        let delta = (state as usize) << self.mt_log | mt_idx;
-        self.table[delta] = packed;
-        Ok(packed)
-    }
 }

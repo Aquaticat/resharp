@@ -47,16 +47,16 @@ compile_error!(
 );
 
 pub(crate) mod accel;
+pub(crate) mod bdfa;
 pub(crate) mod engine;
 pub(crate) mod fas;
 pub(crate) mod prefix;
+pub(crate) mod stream;
+pub use stream::StreamState;
 
 pub(crate) mod simd;
 
-#[doc(hidden)]
-pub fn has_simd() -> bool {
-    simd::has_simd()
-}
+
 
 #[cfg(feature = "diag")]
 pub use prefix::calc_potential_start;
@@ -68,17 +68,12 @@ pub use prefix::calc_prefix_sets;
 pub use prefix::PrefixSets;
 pub(crate) use resharp_algebra::solver::TSetId;
 use resharp_algebra::Kind;
-use rustc_hash::FxHashMap;
-
-// bdfa_scan / bdfa_inner const-generic PREFIX modes
-const PREFIX_NONE: u8 = 0;
-const PREFIX_SEARCH: u8 = 1;
-const PREFIX_LITERAL: u8 = 2;
-
-pub use resharp_algebra::nulls::Nullability;
+pub(crate) use resharp_algebra::nulls::Nullability;
+#[doc(hidden)]
 pub use resharp_algebra::NodeId;
+#[doc(hidden)]
 pub use resharp_algebra::RegexBuilder;
-pub use resharp_algebra::TRegexId;
+
 /// escape all resharp meta characters in `text`, returning a pattern
 /// that matches the literal string.
 ///
@@ -156,63 +151,66 @@ impl From<resharp_algebra::ResharpError> for Error {
 ///     .case_insensitive(true)   // global (?i)
 ///     .dot_matches_new_line(true); // . matches \n
 /// ```
-/// Controls which Unicode character tables `\w` and `\d` use.
+/// Coverage of `\w`/`\d`/`\s` and the width of `.` / negated classes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum UnicodeMode {
-    /// `\w` = `[a-zA-Z0-9_]`, `\d` = `[0-9]`. `.` and
-    /// bracketed-class negation step byte-by-byte. Fastest
+    /// ASCII `\w`/`\d`/`\s`; `.` and negated classes step byte-by-byte. Fastest.
     Ascii,
-    /// Default: covers major scripts up through U+07FF (Latin, Greek, Cyrillic,
-    /// Hebrew, Arabic, ...). All encoded as 1- or 2-byte UTF-8 sequences.
+    /// `\w` covers scripts up to 2-byte UTF-8 (Latin, Greek, Cyrillic, Hebrew, Arabic, ...);
+    /// `\d` and `\s` are ASCII.
     #[default]
     Default,
-    /// All Unicode word/digit characters, including CJK, historic scripts,
-    /// and any code points requiring 3- or 4-byte UTF-8 sequences. `.` and
-    /// negated bracket classes match one full UTF-8 codepoint.
+    /// Full Unicode `\w`/`\d`/`\s` (incl. CJK and historic scripts, up to 4-byte UTF-8);
+    /// `.` and negated classes match one full codepoint.
     Full,
-    /// ASCII `\w`/`\d`/`\s`, but `.`, `[^...]`, `\W`/`\D`/`\S` match one full
-    /// UTF-8 codepoint. Matches default JS `RegExp` behavior (no `u` flag).
+    /// ASCII `\w`/`\d`/`\s`, but `.`, `[^...]`, `\W`/`\D`/`\S` match one full codepoint.
+    /// Matches default JS `RegExp` behavior (no `u` flag).
     Javascript,
 }
 
 /// Regex configuration, passed to [`Regex::with_options`].
 pub struct RegexOptions {
-    /// states to eagerly precompile (0 = fully lazy).
-    pub dfa_threshold: usize,
-    /// max cached DFA states; clamped to `u16::MAX`.
+    /// max cached DFA states, clamped to `u16::MAX` (default: `u16::MAX`).
     pub max_dfa_capacity: usize,
     /// max lookahead context distance (default: 800).
     pub lookahead_context_max: u32,
-    /// Unicode coverage for `\w` and `\d` (default: `UnicodeMode::Unicode`).
+    /// Unicode coverage for `\w`/`\d`/`\s` and width of `.` / negated classes
+    /// (default: `UnicodeMode::Default`).
     pub unicode: UnicodeMode,
     /// global case-insensitive matching (default: false).
     pub case_insensitive: bool,
     /// `.` matches `\n` (default: false). `_` always matches any byte.
     pub dot_matches_new_line: bool,
+    /// `^` and `$` match at line boundaries (`\n`) in addition to text
+    /// boundaries (default: true). Disable with `(?-m)` inline or this flag.
+    pub multiline: bool,
     /// allow whitespace and `#` comments in the pattern (default: false).
     pub ignore_whitespace: bool,
-    /// use O(N·S) hardened forward scan (default: false).
-    /// prevents quadratic blowup on adversarial pattern+input combinations.
+    /// use hardened forward scan (default: false).
+    /// slower, but prevents O(n^2) all-matches blowup on adversarial combinations.
     pub hardened: bool,
+    /// remove the default pattern size limit for very large regexes (default: false).
+    pub unbounded_size: bool,
 }
 
 impl Default for RegexOptions {
     fn default() -> Self {
         Self {
-            dfa_threshold: 0,
             max_dfa_capacity: u16::MAX as usize,
             lookahead_context_max: 800,
             unicode: UnicodeMode::Default,
             case_insensitive: false,
             dot_matches_new_line: false,
+            multiline: true,
             ignore_whitespace: false,
             hardened: false,
+            unbounded_size: false,
         }
     }
 }
 
 impl RegexOptions {
-    /// set Unicode coverage for `\w` and `\d`.
+    /// set Unicode coverage for `\w`/`\d`/`\s` and width of `.` / negated classes.
     pub fn unicode(mut self, mode: UnicodeMode) -> Self {
         self.unicode = mode;
         self
@@ -227,6 +225,11 @@ impl RegexOptions {
         self.dot_matches_new_line = yes;
         self
     }
+    /// `^`/`$` match at `\n` (default: true), set false to make `^`/`$` same as `\A`/`\z`.
+    pub fn multiline(mut self, yes: bool) -> Self {
+        self.multiline = yes;
+        self
+    }
     /// set ignore-whitespace (verbose) mode.
     pub fn ignore_whitespace(mut self, yes: bool) -> Self {
         self.ignore_whitespace = yes;
@@ -235,6 +238,13 @@ impl RegexOptions {
     /// enable hardened mode for untrusted patterns: uses only O(N·S) forward scan (~5-20x constant overhead).
     pub fn hardened(mut self, yes: bool) -> Self {
         self.hardened = yes;
+        self
+    }
+    /// disable parser and algebra size caps.
+    /// the defaults are generous; if you hit them, splitting the pattern into
+    /// several smaller regexes is almost always the better fix than raising the limit.
+    pub fn unbounded_size(mut self, yes: bool) -> Self {
+        self.unbounded_size = yes;
         self
     }
 }
@@ -252,12 +262,13 @@ pub struct Match {
 pub(crate) struct RegexInner {
     pub(crate) b: RegexBuilder,
     pub(crate) fwd: engine::LDFA,
+    pub(crate) fwd_ts: engine::LDFA,
+    pub(crate) rev: Option<engine::LDFA>,
     pub(crate) rev_ts: engine::LDFA,
-    pub(crate) rev_bare: Option<engine::LDFA>,
+    pub(crate) stream: stream::StreamInit,
     pub(crate) nulls: Vec<usize>,
     pub(crate) matches: Vec<Match>,
-    pub(crate) bounded: Option<engine::BDFA>,
-    /// experimental forward dfa for hardened mode
+    pub(crate) bounded: Option<bdfa::BDFA>,
     pub(crate) fas: Option<fas::FwdDFA>,
 }
 
@@ -277,84 +288,44 @@ pub struct Regex {
     pub(crate) rev_trivial: bool,
     pub(crate) initial_nullability: Nullability,
     pub(crate) fwd_end_nullable: bool,
-    /// `Y·_*` shape: at most one match. skip rev+fwd.
-    pub(crate) trailing_star_anchored_left: bool,
-    pub(crate) trailing_star_branch_left: bool,
+    // unfinished experimental optimizations, will not put these in yet
+    // `Y·_*` shape: at most one match. skip rev+fwd.
+    // pub(crate) trailing_star_anchored_left: bool,
+    // pub(crate) trailing_star_branch_left: bool,
     pub(crate) hardened: bool,
     pub(crate) has_bounded_prefix: bool,
     pub(crate) has_bounded: bool,
     pub(crate) lb_check_bytes: u8,
     pub(crate) fwd_lb_begin_nullable: bool,
     pub(crate) has_anchors: bool,
-}
-
-#[inline(never)]
-fn bdfa_inner<const PREFIX: u8>(
-    table: *const u32,
-    ml: *const u8,
-    data: *const u8,
-    mt_log: u32,
-    initial: u16,
-    match_end_off: *const u32,
-    mut state: u16,
-    mut pos: usize,
-    len: usize,
-    match_buf: *mut Match,
-    match_cap: usize,
-) -> (u16, usize, usize) {
-    let mut mc: usize = 0;
-    unsafe {
-        while pos < len {
-            if PREFIX != PREFIX_NONE && state == initial {
-                return (state, pos, mc);
-            }
-            let mt = *ml.add(*data.add(pos) as usize) as usize;
-            let delta = (state as usize) << mt_log | mt;
-            let entry = *table.add(delta);
-            if entry == 0 {
-                return (state, pos, mc);
-            }
-            let rel = entry >> 16;
-            state = (entry & 0xFFFF) as u16;
-            if rel > 0 {
-                if mc >= match_cap {
-                    return (state, pos, mc);
-                }
-                let end_off = *match_end_off.add(state as usize);
-                let end = pos + 1 - end_off as usize;
-                *match_buf.add(mc) = Match {
-                    start: pos + 1 - rel as usize,
-                    end,
-                };
-                mc += 1;
-                state = initial;
-                pos = end;
-                continue;
-            }
-            pos += 1;
-        }
-        (state, pos, mc)
-    }
+    pub(crate) stream_cache: stream::StreamCache,
 }
 
 // not a security measure. only flags obvious cases where hardening results in better performance
-fn auto_harden(b: &mut RegexBuilder, start: NodeId, has_anchors: bool) -> bool {
+#[derive(Clone, Copy, Default)]
+struct Hardening {
+    full: bool,
+    no_fwd_prefix: bool,
+}
+
+/// auto-hardening heuristic, flags some patterns for hardened forward scan.
+fn auto_harden(b: &mut RegexBuilder, start: NodeId, has_anchors: bool) -> Hardening {
     const NODE_BUDGET: usize = 128;
     const LARGE_COVER: u32 = 128;
     let opener = opener_class(b, start);
     if opener == TSetId::EMPTY {
-        return false;
+        return Hardening::default();
     }
     let opener_full = b.solver().is_full_id(opener);
     let Some(graph) = build_partial_graph(b, start, NODE_BUDGET) else {
-        return false;
+        return Hardening::default();
     };
     if graph
         .nodes
         .iter()
         .any(|&n| b.get_kind(n) == resharp_algebra::Kind::Compl)
     {
-        return false;
+        return Hardening::default();
     }
     let mut pure_star: Vec<bool> = vec![false; graph.nodes.len()];
     for (i, &n) in graph.nodes.iter().enumerate() {
@@ -376,11 +347,9 @@ fn auto_harden(b: &mut RegexBuilder, start: NodeId, has_anchors: bool) -> bool {
         && graph.edges[0][0].dst == 0
         && b.solver().is_full_id(graph.edges[0][0].set)
     {
-        return false;
+        return Hardening::default();
     }
-    if !opener_full && b.solver().byte_count(opener) < LARGE_COVER {
-        return false;
-    }
+
     let reach = transitive_closure(&graph);
     let sccs = sccs_from_reach(&reach);
     let mut node_scc: Vec<usize> = vec![0; graph.nodes.len()];
@@ -424,7 +393,10 @@ fn auto_harden(b: &mut RegexBuilder, start: NodeId, has_anchors: bool) -> bool {
             continue;
         }
         if i == 0 {
-            return true;
+            return Hardening {
+                full: true,
+                no_fwd_prefix: true,
+            };
         }
         let start_to_i = graph.edges[0]
             .iter()
@@ -432,9 +404,14 @@ fn auto_harden(b: &mut RegexBuilder, start: NodeId, has_anchors: bool) -> bool {
             .fold(TSetId::EMPTY, |acc, e| b.solver().or_id(acc, e.set));
         let entry_wide = b.solver().byte_count(start_to_i) >= ENTRY_BYTES;
         if !has_anchors && min_len <= SHORT_PREFIX && entry_wide {
-            return true;
+            return Hardening {
+                full: true,
+                no_fwd_prefix: true,
+            };
         }
     }
+    let mut no_fwd_prefix = false;
+    let opener_wide = opener_full || b.solver().byte_count(opener) >= LARGE_COVER;
     for scc in sccs {
         let non_trivial = scc.len() > 1 || graph.edges[scc[0]].iter().any(|e| e.dst == scc[0]);
         if !non_trivial {
@@ -453,7 +430,22 @@ fn auto_harden(b: &mut RegexBuilder, start: NodeId, has_anchors: bool) -> bool {
                 .fold(TSetId::EMPTY, |acc, e| b.solver().or_id(acc, e.set));
             b.solver().is_full_id(cover)
         });
-        if !sticky {
+        const SPIN_FREQ_THRESHOLD: u64 = crate::prefix::TOTAL_BYTE_FREQ / 2;
+        let scc_set_local: std::collections::HashSet<usize> = scc.iter().copied().collect();
+        let has_wide_spin = scc.iter().any(|&n| {
+            let in_scc_cover = graph.edges[n]
+                .iter()
+                .filter(|e| scc_set_local.contains(&e.dst))
+                .fold(TSetId::EMPTY, |acc, e| b.solver().or_id(acc, e.set));
+            let freq: u64 = b
+                .solver()
+                .collect_bytes(in_scc_cover)
+                .iter()
+                .map(|&byte| crate::simd::BYTE_FREQ[byte as usize] as u64)
+                .sum();
+            freq >= SPIN_FREQ_THRESHOLD
+        });
+        if !has_wide_spin {
             continue;
         }
         let restartable = scc.iter().any(|&n| {
@@ -463,6 +455,9 @@ fn auto_harden(b: &mut RegexBuilder, start: NodeId, has_anchors: bool) -> bool {
         });
         if !restartable {
             continue;
+        }
+        if !has_anchors {
+            no_fwd_prefix = true;
         }
         let start_branches = graph.edges[0].len() >= 2;
         let scc_branches = scc.iter().any(|&n| graph.edges[n].len() >= 3);
@@ -485,11 +480,20 @@ fn auto_harden(b: &mut RegexBuilder, start: NodeId, has_anchors: bool) -> bool {
         if start_escapes_scc && !start_in_cycle {
             continue;
         }
-        if start_branches || scc_branches {
-            return true;
+        if sticky && opener_wide && (start_branches || scc_branches) {
+            return Hardening {
+                full: true,
+                no_fwd_prefix: true,
+            };
         }
     }
-    false
+    if no_fwd_prefix {
+        return Hardening {
+            full: false,
+            no_fwd_prefix: true,
+        };
+    }
+    Hardening::default()
 }
 
 struct Edge {
@@ -666,13 +670,25 @@ impl Regex {
             ascii_perl_classes: opts.unicode == UnicodeMode::Javascript,
             case_insensitive: opts.case_insensitive,
             dot_matches_new_line: opts.dot_matches_new_line,
+            multiline: opts.multiline,
             ignore_whitespace: opts.ignore_whitespace,
+            expanded_ast_limit: if opts.unbounded_size {
+                u64::MAX
+            } else {
+                resharp_parser::DEFAULT_EXPANDED_AST_LIMIT
+            },
+            max_list_len: if opts.unbounded_size {
+                usize::MAX
+            } else {
+                resharp_parser::DEFAULT_MAX_LIST_LEN
+            },
         };
         let node = resharp_parser::parse_ast_with(&mut b, pattern, &pflags)?;
         Self::from_node_inner(b, node, opts, pattern.len())
     }
 
     /// build from a pre-constructed AST node.
+    #[doc(hidden)]
     pub fn from_node(b: RegexBuilder, node: NodeId, opts: RegexOptions) -> Result<Regex, Error> {
         Self::from_node_inner(b, node, opts, 0)
     }
@@ -684,8 +700,12 @@ impl Regex {
         pattern_len: usize,
     ) -> Result<Regex, Error> {
         // sanity check
-        const NODE_LIMIT: usize = 200_000;
-        if b.tree_size(node, NODE_LIMIT) >= NODE_LIMIT {
+        let node_limit = if opts.unbounded_size {
+            usize::MAX
+        } else {
+            200_000
+        };
+        if b.tree_size(node, node_limit) >= node_limit {
             return Err(Error::PatternTooLarge);
         }
         ensure_supported(&mut b, node)?;
@@ -698,18 +718,18 @@ impl Regex {
         let node = b.simplify_fwd_initial(node);
         let fwd_start = b.strip_lb(node)?;
         let fwd_end_nullable = b.nullability(fwd_start).has(Nullability::END);
-        let mut shape_memo: FxHashMap<NodeId, NodeId> = FxHashMap::default();
-        let fwd_shape = b.prune_fwd(fwd_start, &mut shape_memo);
-        let lb_stripped = fwd_start != node;
-        let trailing_star_anchored_left =
-            !lb_stripped && b.ends_with_ts(fwd_shape) && !b.starts_with_ts(fwd_shape);
-        let trailing_star_branch_left = !lb_stripped
-            && !trailing_star_anchored_left
-            && b.ends_with_ts_any_branch(fwd_shape)
-            && !b.starts_with_ts(fwd_shape);
+        // let mut shape_memo: FxHashMap<NodeId, NodeId> = FxHashMap::default();
+        // let fwd_shape = b.prune_fwd(fwd_start, &mut shape_memo);
+        // let lb_stripped = fwd_start != node;
+        // let trailing_star_anchored_left =
+        //     !lb_stripped && b.ends_with_ts(fwd_shape) && !b.starts_with_ts(fwd_shape);
+        // let trailing_star_branch_left = !lb_stripped
+        //     && !trailing_star_anchored_left
+        //     && b.ends_with_ts_any_branch(fwd_shape)
+        //     && !b.starts_with_ts(fwd_shape);
         let ts_rev_start = b.ts_rev_start(node)?;
-        // TODO: make it configurable to actually check and reject empty lang entriely
         let is_empty_lang = node == NodeId::BOT;
+        // TODO: make it configurable to actually check and reject empty lang entriely
         let fwd_begin_anchored = node == NodeId::BEGIN
             || (b.get_kind(node) == resharp_algebra::Kind::Concat
                 && node.left(&b) == NodeId::BEGIN);
@@ -727,41 +747,56 @@ impl Regex {
             None
         };
         let has_look = b.contains_look(node);
-
         let max_cap = opts.max_dfa_capacity.min(u16::MAX as usize);
-
-        let (selected, rev_skip) =
-            prefix::select_prefix(&mut b, node, ts_rev_start, has_look, min_len, max_cap)?;
-
-        let has_fwd_prefix = matches!(
-            selected,
-            Some(
-                prefix::PrefixKind::AnchoredFwd(_)
-                    | prefix::PrefixKind::UnanchoredFwd(_)
-                    | prefix::PrefixKind::AnchoredFwdLb(_)
-            )
-        );
-        let fwd_prefix_stripped = matches!(selected, Some(prefix::PrefixKind::UnanchoredFwd(_)));
-        // default to hardened when the default dispatch would be pathological
         let mut opts = opts;
         let has_anchors_pre = b.contains_anchors(node);
-        if !opts.hardened && auto_harden(&mut b, fwd_start, has_anchors_pre) {
+        let ah = auto_harden(&mut b, fwd_start, has_anchors_pre);
+        if !opts.hardened && ah.full {
             opts.hardened = true;
         }
+        let (selected, rev_skip) = prefix::select_prefix(
+            &mut b,
+            node,
+            ts_rev_start,
+            has_look,
+            min_len,
+            max_cap,
+            ah.no_fwd_prefix,
+        )?;
+        let has_fwd_prefix = matches!(
+            selected,
+            Some(prefix::PrefixKind::AnchoredFwd(_) | prefix::PrefixKind::AnchoredFwdLb(_))
+        );
         let anchored_fwd = matches!(
             selected,
             Some(prefix::PrefixKind::AnchoredFwd(_) | prefix::PrefixKind::AnchoredFwdLb(_))
         );
         let needs_full_fwd = opts.hardened || anchored_fwd;
-        let mut fwd = if needs_full_fwd {
+        let fwd = if needs_full_fwd {
             engine::LDFA::new(&mut b, fwd_start, max_cap)?
         } else {
             engine::LDFA::new_fwd(&mut b, fwd_start, max_cap)?
         };
 
+        let ts_fwd_start = {
+            let with_ts = b.mk_concat(NodeId::TS, node);
+            b.simplify_fwd_initial(with_ts)
+        };
+        let mut ts_fwd = engine::LDFA::new_fwd(&mut b, ts_fwd_start, max_cap)?;
+
         let mut rev_ts = engine::LDFA::new(&mut b, ts_rev_start, max_cap)?;
         rev_ts.prefix_skip = rev_skip;
         rev_ts.ensure_pruned_skip();
+
+        let stream_init = {
+            let fwd_pruned = b.prune_begin_eps(ts_fwd_start);
+            let rev_pruned = b.prune_begin_eps(ts_rev_start);
+            stream::StreamInit {
+                start_node: node,
+                seek_fwd: ts_fwd.get_or_register(&mut b, fwd_pruned).into(),
+                seek_rev: rev_ts.get_or_register(&mut b, rev_pruned).into(),
+            }
+        };
 
         let (fwd_lb_begin_nullable, lb_check_bytes) =
             if matches!(selected, Some(prefix::PrefixKind::AnchoredFwdLb(_))) {
@@ -785,19 +820,6 @@ impl Regex {
                 (false, 0)
             };
 
-        if opts.dfa_threshold > 0 {
-            fwd.precompile(&mut b, opts.dfa_threshold);
-            if !has_fwd_prefix {
-                rev_ts.precompile(&mut b, opts.dfa_threshold);
-            }
-        }
-
-        let rev_bare = if fwd_prefix_stripped {
-            Some(engine::LDFA::new(&mut b, ts_rev_start, max_cap)?)
-        } else {
-            None
-        };
-
         // lots of conditions when something else is better.. possibly removing it entirely
         let use_bounded = !has_fwd_prefix
             && max_length.is_some()
@@ -809,7 +831,7 @@ impl Regex {
             && !empty_nullable;
 
         let bounded = if use_bounded {
-            Some(engine::BDFA::new(&mut b, fwd_start)?)
+            Some(bdfa::BDFA::new(&mut b, fwd_start)?)
         } else {
             None
         };
@@ -817,7 +839,7 @@ impl Regex {
         let has_bounded = bounded.is_some();
         let has_bounded_prefix = bounded
             .as_ref()
-            .is_some_and(|bd: &crate::engine::BDFA| bd.prefix.is_some());
+            .is_some_and(|bd: &crate::bdfa::BDFA| bd.prefix.is_some());
 
         let has_anchors = b.contains_anchors(node);
 
@@ -847,8 +869,10 @@ impl Regex {
             inner: Mutex::new(RegexInner {
                 b,
                 fwd,
+                fwd_ts: ts_fwd,
+                rev: None,
                 rev_ts,
-                rev_bare,
+                stream: stream_init,
                 nulls: Vec::new(),
                 matches: Vec::new(),
                 bounded,
@@ -863,14 +887,15 @@ impl Regex {
             rev_trivial,
             initial_nullability,
             fwd_end_nullable,
-            trailing_star_anchored_left,
-            trailing_star_branch_left,
+            // trailing_star_anchored_left,
+            // trailing_star_branch_left,
             hardened,
             has_bounded_prefix,
             has_bounded,
             lb_check_bytes,
             fwd_lb_begin_nullable,
             has_anchors,
+            stream_cache: Default::default(),
         })
     }
 
@@ -887,12 +912,23 @@ impl Regex {
         (inner.fwd.state_nodes.len(), inner.rev_ts.state_nodes.len())
     }
 
-    /// whether hardened linear-scan mode is enabled
+    #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
     pub fn is_hardened(&self) -> bool {
         self.hardened
     }
 
-    /// whether the pattern is forward-begin-anchored (`^`/`\A`)
+    #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
+    pub fn has_fwd_prefix(&self) -> bool {
+        matches!(
+            self.prefix,
+            Some(prefix::PrefixKind::AnchoredFwd(_) | prefix::PrefixKind::AnchoredFwdLb(_))
+        )
+    }
+
+    #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
     pub fn is_fwd_begin_anchored(&self) -> bool {
         self.fwd_begin_anchored
     }
@@ -913,7 +949,6 @@ impl Regex {
         match &self.prefix {
             None => None,
             Some(prefix::PrefixKind::AnchoredFwd(_)) => Some("AnchoredFwd"),
-            Some(prefix::PrefixKind::UnanchoredFwd(_)) => Some("UnanchoredFwd"),
             Some(prefix::PrefixKind::AnchoredFwdLb(_)) => Some("AnchoredFwdLb"),
             Some(prefix::PrefixKind::AnchoredRev) => Some("AnchoredRev"),
             Some(prefix::PrefixKind::PotentialStart) => Some("PotentialStart"),
@@ -925,7 +960,6 @@ impl Regex {
     pub fn fwd_prefix_kind(&self) -> Option<(&'static str, usize)> {
         match &self.prefix {
             Some(prefix::PrefixKind::AnchoredFwd(fp))
-            | Some(prefix::PrefixKind::UnanchoredFwd(fp))
             | Some(prefix::PrefixKind::AnchoredFwdLb(fp)) => Some((fp.variant_name(), fp.len())),
             _ => None,
         }
@@ -970,32 +1004,22 @@ impl Regex {
             }
             return self.find_all_dfa(input);
         }
-        // `Y·_*` shape: single match `(leftmost Y start, input.len())`.
-        // Skip trailing-star path if Y has a usable fwd prefix (SIMD wins).
-        let has_fwd_prefix = matches!(
-            &self.prefix,
-            Some(
-                prefix::PrefixKind::AnchoredFwd(_)
-                    | prefix::PrefixKind::UnanchoredFwd(_)
-                    | prefix::PrefixKind::AnchoredFwdLb(_)
-            )
-        );
-        if self.trailing_star_anchored_left && !has_fwd_prefix {
-            return self.find_all_trailing_star(input);
-        }
-        // Some-branch trailing `_*`: probe leftmost match, fall back if not saturating.
-        if self.trailing_star_branch_left && !has_fwd_prefix {
-            if let Some(out) = self.find_all_trailing_star_probe(input)? {
-                return Ok(out);
-            }
-        }
+
+        // todo: `Y·_*` shape: single match into _*
+        // let has_fwd_prefix = matches!(
+        //     &self.prefix,
+        //     Some(prefix::PrefixKind::AnchoredFwd(_) | prefix::PrefixKind::AnchoredFwdLb(_))
+        // );
+        // if self.trailing_star_anchored_left && !has_fwd_prefix {
+        //     return self.find_all_trailing_star(input);
+        // }
+       
         #[cfg(all(feature = "debug", debug_assertions))]
         {
             let pre_kind = match &self.prefix {
                 None => "None",
                 Some(prefix::PrefixKind::AnchoredRev) => "AnchoredRev",
                 Some(prefix::PrefixKind::AnchoredFwd(_)) => "AnchoredFwd",
-                Some(prefix::PrefixKind::UnanchoredFwd(_)) => "UnanchoredFwd",
                 Some(prefix::PrefixKind::AnchoredFwdLb(_)) => "AnchoredFwdLb",
                 Some(prefix::PrefixKind::PotentialStart) => "PotentialStart",
             };
@@ -1004,11 +1028,7 @@ impl Regex {
                 pre_kind, self.has_bounded, self.fwd_end_nullable
             );
         }
-        // Prefix selection already chose; honour it. Bounded BDFA only wins with no prefix.
         match &self.prefix {
-            Some(prefix::PrefixKind::UnanchoredFwd(_)) => {
-                return self.find_all_fwd_prefix_stripped(input);
-            }
             Some(prefix::PrefixKind::AnchoredFwd(_)) => {
                 return self.find_all_fwd_prefix(input);
             }
@@ -1302,6 +1322,7 @@ impl Regex {
     }
 
     /// `Y·_*` shape: emit single match at leftmost Y start.
+    #[allow(dead_code)]
     fn find_all_trailing_star(&self, input: &[u8]) -> Result<Vec<Match>, Error> {
         let inner = &mut *self.inner.lock().unwrap();
         let mut pos = 0;
@@ -1316,25 +1337,6 @@ impl Regex {
             pos += 1;
         }
         Ok(vec![])
-    }
-
-    fn find_all_trailing_star_probe(&self, input: &[u8]) -> Result<Option<Vec<Match>>, Error> {
-        let inner = &mut *self.inner.lock().unwrap();
-        let mut pos = 0;
-        while pos < input.len() {
-            let max_end = inner.fwd.scan_fwd_slow(&mut inner.b, pos, input)?;
-            if max_end != engine::NO_MATCH && max_end > pos {
-                if max_end == input.len() {
-                    return Ok(Some(vec![Match {
-                        start: pos,
-                        end: max_end,
-                    }]));
-                }
-                return Ok(None);
-            }
-            pos += 1;
-        }
-        Ok(Some(vec![]))
     }
 
     fn find_all_dfa(&self, input: &[u8]) -> Result<Vec<Match>, Error> {
@@ -1368,8 +1370,6 @@ impl Regex {
             eprintln!("nulls_after_rev={}", &inner.nulls.len());
         }
 
-        // FAS fast path: only spawn matches at begin positions discovered by rev pass
-        // (unless the pattern is always-nullable, in which case every position is valid).
         if self.hardened {
             let RegexInner {
                 ref mut b,
@@ -1382,8 +1382,6 @@ impl Regex {
             let fas = fas.as_mut().unwrap();
             if self.always_nullable {
                 fwd.scan_fwd_active_set::<true>(b, fas, input, nulls, matches)?;
-                // FAS now backfills empty matches at uncovered always-nullable
-                // positions including data_end; only push if not already there.
                 if matches.last().map(|m| m.start) != Some(input.len()) {
                     matches.push(Match {
                         start: input.len(),
@@ -1476,13 +1474,18 @@ impl Regex {
         matches_buf.clear();
         match &bounded.prefix {
             Some(p) if p.is_literal() => {
-                Self::bdfa_scan::<{ PREFIX_LITERAL }, false>(bounded, b, input, matches_buf)?;
+                bdfa::bdfa_scan::<{ bdfa::Prefix::Literal as u8 }, false>(
+                    bounded,
+                    b,
+                    input,
+                    matches_buf,
+                )?;
             }
             Some(_) => {
-                Self::bdfa_scan::<{ PREFIX_SEARCH }, false>(bounded, b, input, matches_buf)?;
+                bdfa::bdfa_scan::<{ bdfa::Prefix::Search as u8 }, false>(bounded, b, input, matches_buf)?;
             }
             None => {
-                Self::bdfa_scan::<{ PREFIX_NONE }, false>(bounded, b, input, matches_buf)?;
+                bdfa::bdfa_scan::<{ bdfa::Prefix::None as u8 }, false>(bounded, b, input, matches_buf)?;
             }
         }
         Ok(matches_buf.clone())
@@ -1499,227 +1502,18 @@ impl Regex {
         matches_buf.clear();
         let found = match &bounded.prefix {
             Some(p) if p.is_literal() => {
-                Self::bdfa_scan::<{ PREFIX_LITERAL }, true>(bounded, b, input, matches_buf)?
+                bdfa::bdfa_scan::<{ bdfa::Prefix::Literal as u8 }, true>(bounded, b, input, matches_buf)?
             }
-            Some(_) => Self::bdfa_scan::<{ PREFIX_SEARCH }, true>(bounded, b, input, matches_buf)?,
-            None => Self::bdfa_scan::<{ PREFIX_NONE }, true>(bounded, b, input, matches_buf)?,
+            Some(_) => {
+                bdfa::bdfa_scan::<{ bdfa::Prefix::Search as u8 }, true>(bounded, b, input, matches_buf)?
+            }
+            None => {
+                bdfa::bdfa_scan::<{ bdfa::Prefix::None as u8 }, true>(bounded, b, input, matches_buf)?
+            }
         };
         Ok(found)
     }
 
-    fn bdfa_scan<const PREFIX: u8, const ISMATCH: bool>(
-        bounded: &mut engine::BDFA,
-        b: &mut RegexBuilder,
-        input: &[u8],
-        matches: &mut Vec<Match>,
-    ) -> Result<bool, Error> {
-        let initial = bounded.initial;
-        let mt_log = bounded.mt_log;
-        let ml = bounded.minterms_lookup;
-        let len = input.len();
-        let mut state = initial;
-        let mut pos: usize = 0;
-
-        if PREFIX == PREFIX_NONE {
-            let data = input.as_ptr();
-            if !ISMATCH {
-                matches.reserve(2048);
-            }
-            loop {
-                if !ISMATCH && matches.len() == matches.capacity() {
-                    matches.reserve(matches.capacity().max(256));
-                }
-                let spare = if ISMATCH {
-                    1
-                } else {
-                    matches.capacity() - matches.len()
-                };
-                let buf_ptr = unsafe { matches.as_mut_ptr().add(matches.len()) };
-                let table = bounded.table.as_ptr();
-                let meo = bounded.match_end_off.as_ptr();
-                let (s, p, mc) = bdfa_inner::<{ PREFIX_NONE }>(
-                    table,
-                    ml.as_ptr(),
-                    data,
-                    mt_log,
-                    initial,
-                    meo,
-                    state,
-                    pos,
-                    len,
-                    buf_ptr,
-                    spare,
-                );
-                state = s;
-                pos = p;
-                if ISMATCH && mc > 0 {
-                    return Ok(true);
-                }
-                unsafe { matches.set_len(matches.len() + mc) };
-                if pos >= len {
-                    break;
-                }
-                let mt = ml[input[pos] as usize] as usize;
-                let entry = bounded.transition(b, state, mt)?;
-                state = (entry & 0xFFFF) as u16;
-                let rel = entry >> 16;
-                if rel > 0 {
-                    if ISMATCH {
-                        return Ok(true);
-                    }
-                    let end_off = bounded.match_end_off[state as usize];
-                    matches.push(Match {
-                        start: pos + 1 - rel as usize,
-                        end: pos + 1 - end_off as usize,
-                    });
-                    state = initial;
-                } else {
-                    pos += 1;
-                }
-            }
-        } else {
-            // PREFIX_SEARCH / PREFIX_LITERAL
-            'main: loop {
-                if pos >= len {
-                    break;
-                }
-
-                if state == initial {
-                    let found = bounded.prefix.as_ref().unwrap().find_fwd(input, pos);
-                    match found {
-                        Some(p) => {
-                            if PREFIX == PREFIX_LITERAL {
-                                pos = p + bounded.prefix_len;
-                                state = bounded.after_prefix;
-                            } else {
-                                pos = p;
-                                for _ in 0..bounded.prefix_len {
-                                    if pos >= len {
-                                        break;
-                                    }
-                                    let mt = ml[input[pos] as usize] as usize;
-                                    let delta = (state as usize) << mt_log | mt;
-                                    let entry = bounded.table[delta];
-                                    let entry = if entry != 0 {
-                                        entry
-                                    } else {
-                                        bounded.transition(b, state, mt)?
-                                    };
-                                    state = (entry & 0xFFFF) as u16;
-                                    if state == initial {
-                                        break;
-                                    }
-                                    pos += 1;
-                                }
-                            }
-                            let rel = bounded.match_rel[state as usize];
-                            if rel > 0 {
-                                if ISMATCH {
-                                    return Ok(true);
-                                }
-                                let end_off = bounded.match_end_off[state as usize];
-                                matches.push(Match {
-                                    start: pos - rel as usize + 1,
-                                    end: pos - end_off as usize + 1,
-                                });
-                                state = initial;
-                            }
-                            continue 'main;
-                        }
-                        None => break 'main,
-                    }
-                }
-
-                unsafe {
-                    let table = bounded.table.as_ptr();
-                    let data = input.as_ptr();
-                    let ml_ptr = ml.as_ptr();
-                    let meo = bounded.match_end_off.as_ptr();
-
-                    while pos < len {
-                        let mt = *ml_ptr.add(*data.add(pos) as usize) as usize;
-                        let delta = (state as usize) << mt_log | mt;
-                        let entry = *table.add(delta);
-                        if entry == 0 {
-                            break;
-                        }
-                        let rel = entry >> 16;
-                        state = (entry & 0xFFFF) as u16;
-                        if state == initial {
-                            continue 'main;
-                        }
-                        if rel > 0 {
-                            if ISMATCH {
-                                return Ok(true);
-                            }
-                            let end_off = *meo.add(state as usize);
-                            matches.push(Match {
-                                start: pos + 1 - rel as usize,
-                                end: pos + 1 - end_off as usize,
-                            });
-                            state = initial;
-                            continue 'main;
-                        }
-                        pos += 1;
-                    }
-                }
-
-                if pos >= len {
-                    break;
-                }
-                let mt = ml[input[pos] as usize] as usize;
-                let entry = bounded.transition(b, state, mt)?;
-                state = (entry & 0xFFFF) as u16;
-                let rel = entry >> 16;
-                if rel > 0 {
-                    if ISMATCH {
-                        return Ok(true);
-                    }
-                    let end_off = bounded.match_end_off[state as usize];
-                    let end = pos + 1 - end_off as usize;
-                    matches.push(Match {
-                        start: pos + 1 - rel as usize,
-                        end,
-                    });
-                    state = initial;
-                    pos = end;
-                } else {
-                    pos += 1;
-                }
-            }
-        }
-
-        if state != initial {
-            let node = bounded.states[state as usize];
-            if node != NodeId::MISSING {
-                // walk chain: find best match among all chain nodes
-                let mut best_val = 0u32;
-                let mut best_step = 0u32;
-                let mut cur = node;
-                while cur.0 > NodeId::BOT.0 {
-                    let packed = b.get_extra(cur);
-                    let step = packed & 0xFFFF;
-                    let best = packed >> 16;
-                    if best > best_val {
-                        best_val = best;
-                        best_step = step;
-                    }
-                    cur = cur.right(b);
-                }
-                if best_val > 0 {
-                    if ISMATCH {
-                        return Ok(true);
-                    }
-                    matches.push(Match {
-                        start: len - best_step as usize,
-                        end: len - best_step as usize + best_val as usize,
-                    });
-                }
-            }
-        }
-
-        Ok(false)
-    }
 
     fn find_all_fwd_prefix(&self, input: &[u8]) -> Result<Vec<Match>, Error> {
         let fwd_prefix = self.prefix.as_ref().and_then(|p| p.fwd_search()).unwrap();
@@ -1776,55 +1570,6 @@ impl Regex {
         Ok(matches.clone())
     }
 
-    fn find_all_fwd_prefix_stripped(&self, input: &[u8]) -> Result<Vec<Match>, Error> {
-        let fwd_prefix = self.prefix.as_ref().and_then(|p| p.fwd_search()).unwrap();
-        let inner = &mut *self.inner.lock().unwrap();
-        let prefix_len = fwd_prefix.len();
-        inner.fwd.create_state(&mut inner.b, engine::DFA_INITIAL)?;
-        inner.matches.clear();
-        let mut search_start = 0;
-
-        while let Some(candidate) = fwd_prefix.find_fwd(input, search_start) {
-            // 1. confirm match end via fwd DFA
-            let mut state = engine::DFA_INITIAL;
-            for i in 0..prefix_len {
-                let mt = inner.fwd.mt_lookup[input[candidate + i] as usize] as u32;
-                state = inner.fwd.lazy_transition(&mut inner.b, state, mt)?;
-                if state == engine::DFA_DEAD {
-                    break;
-                }
-            }
-            if state == engine::DFA_DEAD {
-                search_start = candidate + 1;
-                continue;
-            }
-            let max_end = inner.fwd.scan_fwd_from(
-                &mut inner.b,
-                state as u32,
-                candidate + prefix_len,
-                input,
-            )?;
-            if max_end == engine::NO_MATCH {
-                search_start = candidate + 1;
-                continue;
-            }
-
-            // 2. find match start via bare rev DFA from confirmed end
-            let rev_bare = inner.rev_bare.as_mut().unwrap();
-            let match_start = rev_bare.scan_rev_from(&mut inner.b, max_end, search_start, input)?;
-            if match_start != engine::NO_MATCH {
-                inner.matches.push(Match {
-                    start: match_start,
-                    end: max_end,
-                });
-                search_start = max_end;
-            } else {
-                search_start = candidate + 1;
-            }
-        }
-        Ok(inner.matches.clone())
-    }
-
     fn find_all_fwd_lb_prefix(&self, input: &[u8]) -> Result<Vec<Match>, Error> {
         let fwd_prefix = self.prefix.as_ref().and_then(|p| p.fwd_search()).unwrap();
         let inner = &mut *self.inner.lock().unwrap();
@@ -1869,9 +1614,6 @@ impl Regex {
     ///
     /// returns `None` if the pattern does not match at position 0.
     pub fn find_anchored(&self, input: &[u8]) -> Result<Option<Match>, Error> {
-        if self.is_empty_lang {
-            return Ok(None);
-        }
         if input.is_empty() {
             return if self.empty_nullable {
                 Ok(Some(Match { start: 0, end: 0 }))

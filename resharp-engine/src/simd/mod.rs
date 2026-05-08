@@ -303,17 +303,255 @@ impl FwdLiteralSearch {
 }
 
 #[cfg(target_arch = "x86_64")]
-pub struct RevPrefixSearch {
+pub(crate) struct RevLiteralInner {
+    needle: Vec<u8>,
+    chunks: Vec<u64>,
+    rare_idx: usize,
+    rare_byte: u8,
+    confirm: (usize, u8),
+    pub(crate) tail_offset: usize,
+}
+
+impl RevLiteralInner {
+    pub(crate) fn new(needle: Vec<u8>, tail_offset: usize) -> Self {
+        debug_assert!(!needle.is_empty());
+        let mut rare_idx = 0;
+        let mut rare_freq = BYTE_FREQ[needle[0] as usize];
+        for (i, &b) in needle.iter().enumerate().skip(1) {
+            let f = BYTE_FREQ[b as usize];
+            if f < rare_freq {
+                rare_freq = f;
+                rare_idx = i;
+            }
+        }
+        let confirm_idx = if needle.len() > 1 {
+            let mut ci = if rare_idx == 0 { 1 } else { 0 };
+            let mut cf = BYTE_FREQ[needle[ci] as usize];
+            for (i, &b) in needle.iter().enumerate() {
+                if i == rare_idx { continue; }
+                let f = BYTE_FREQ[b as usize];
+                if f < cf { cf = f; ci = i; }
+            }
+            ci
+        } else {
+            0
+        };
+        let mut chunks = Vec::with_capacity((needle.len() + 7) / 8);
+        let mut i = 0;
+        while i + 8 <= needle.len() {
+            let mut v = [0u8; 8];
+            v.copy_from_slice(&needle[i..i + 8]);
+            chunks.push(u64::from_ne_bytes(v));
+            i += 8;
+        }
+        if i < needle.len() {
+            let mut v = [0u8; 8];
+            v[..needle.len() - i].copy_from_slice(&needle[i..]);
+            chunks.push(u64::from_ne_bytes(v));
+        }
+        Self {
+            rare_idx,
+            rare_byte: needle[rare_idx],
+            confirm: (confirm_idx, needle[confirm_idx]),
+            needle,
+            chunks,
+            tail_offset,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn len(&self) -> usize {
+        self.needle.len()
+    }
+
+    #[inline]
+    fn verify(&self, haystack: &[u8], start: usize) -> bool {
+        let n = self.needle.len();
+        unsafe {
+            let hp = haystack.as_ptr().add(start);
+            let mut ci = 0;
+            let mut off = 0;
+            while off + 8 <= n {
+                let h = (hp.add(off) as *const u64).read_unaligned();
+                if h != self.chunks[ci] { return false; }
+                ci += 1;
+                off += 8;
+            }
+            if off < n {
+                let h = (hp.add(off) as *const u64).read_unaligned();
+                let mask = (1u64 << ((n - off) * 8)) - 1;
+                if (h ^ self.chunks[ci]) & mask != 0 { return false; }
+            }
+        }
+        true
+    }
+
+}
+
+#[cfg(target_arch = "x86_64")]
+impl RevLiteralInner {
+    fn find_rev(&self, haystack: &[u8], end: usize) -> Option<usize> {
+        unsafe { self.find_rev_avx2(haystack, end) }
+    }
+
+    #[target_feature(enable = "avx2")]
+    unsafe fn find_rev_avx2(&self, haystack: &[u8], end: usize) -> Option<usize> {
+        let nlen = self.needle.len();
+        if end + 1 < nlen {
+            return None;
+        }
+        let ptr = haystack.as_ptr();
+        let rare_idx = self.rare_idx;
+        let rare_byte = self.rare_byte;
+        let confirm_idx = self.confirm.0;
+        let confirm_byte = self.confirm.1;
+        let vrare = _mm256_set1_epi8(rare_byte as i8);
+        let min_rare_pos = rare_idx;
+        let mut pos = end - (nlen - 1) + rare_idx;
+        while pos >= min_rare_pos + 32 {
+            let chunk = _mm256_loadu_si256(ptr.add(pos - 31) as *const __m256i);
+            let mut mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, vrare)) as u32;
+            while mask != 0 {
+                let bit = 31 - (mask.leading_zeros() as usize);
+                let start = pos - 31 + bit - rare_idx;
+                if *ptr.add(start + confirm_idx) == confirm_byte && self.verify(haystack, start) {
+                    return Some(start + nlen - 1);
+                }
+                mask &= !(1u32 << bit);
+            }
+            pos -= 32;
+        }
+        loop {
+            if *ptr.add(pos) == rare_byte {
+                let start = pos - rare_idx;
+                if *ptr.add(start + confirm_idx) == confirm_byte && self.verify(haystack, start) {
+                    return Some(start + nlen - 1);
+                }
+            }
+            if pos == min_rare_pos { break; }
+            pos -= 1;
+        }
+        None
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl RevLiteralInner {
+    fn find_rev(&self, haystack: &[u8], end: usize) -> Option<usize> {
+        unsafe { self.find_rev_neon(haystack, end) }
+    }
+
+    #[target_feature(enable = "neon")]
+    unsafe fn find_rev_neon(&self, haystack: &[u8], end: usize) -> Option<usize> {
+        use std::arch::aarch64::*;
+        let nlen = self.needle.len();
+        if end + 1 < nlen { return None; }
+        let ptr = haystack.as_ptr();
+        let rare_idx = self.rare_idx;
+        let rare_byte = self.rare_byte;
+        let confirm_idx = self.confirm.0;
+        let confirm_byte = self.confirm.1;
+        let vrare = vdupq_n_u8(rare_byte);
+        let min_rare_pos = rare_idx;
+        let mut pos = end - (nlen - 1) + rare_idx;
+        while pos >= min_rare_pos + 16 {
+            let chunk = vld1q_u8(ptr.add(pos - 15));
+            let mut mask = super::neon::neon_movemask(vceqq_u8(chunk, vrare));
+            while mask != 0 {
+                let bit = 15 - (mask.leading_zeros() as usize);
+                let start = pos - 15 + bit - rare_idx;
+                if *ptr.add(start + confirm_idx) == confirm_byte && self.verify(haystack, start) {
+                    return Some(start + nlen - 1);
+                }
+                mask &= !(1u16 << bit);
+            }
+            pos -= 16;
+        }
+        loop {
+            if *ptr.add(pos) == rare_byte {
+                let start = pos - rare_idx;
+                if *ptr.add(start + confirm_idx) == confirm_byte && self.verify(haystack, start) {
+                    return Some(start + nlen - 1);
+                }
+            }
+            if pos == min_rare_pos { break; }
+            pos -= 1;
+        }
+        None
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+impl RevLiteralInner {
+    fn find_rev(&self, haystack: &[u8], end: usize) -> Option<usize> {
+        self.find_rev_wasm(haystack, end)
+    }
+
+    fn find_rev_wasm(&self, haystack: &[u8], end: usize) -> Option<usize> {
+        use core::arch::wasm32::*;
+        let nlen = self.needle.len();
+        if end + 1 < nlen { return None; }
+        let ptr = haystack.as_ptr();
+        let rare_idx = self.rare_idx;
+        let rare_byte = self.rare_byte;
+        let confirm_idx = self.confirm.0;
+        let confirm_byte = self.confirm.1;
+        let vrare = u8x16_splat(rare_byte);
+        let min_rare_pos = rare_idx;
+        let mut pos = end - (nlen - 1) + rare_idx;
+        while pos >= min_rare_pos + 16 {
+            let chunk = unsafe { v128_load(ptr.add(pos - 15) as *const v128) };
+            let mut mask = i8x16_bitmask(u8x16_eq(chunk, vrare)) as u16;
+            while mask != 0 {
+                let bit = 15 - (mask.leading_zeros() as usize);
+                let start = pos - 15 + bit - rare_idx;
+                unsafe {
+                    if *ptr.add(start + confirm_idx) == confirm_byte && self.verify(haystack, start) {
+                        return Some(start + nlen - 1);
+                    }
+                }
+                mask &= !(1u16 << bit);
+            }
+            pos -= 16;
+        }
+        unsafe {
+            loop {
+                if *ptr.add(pos) == rare_byte {
+                    let start = pos - rare_idx;
+                    if *ptr.add(start + confirm_idx) == confirm_byte && self.verify(haystack, start) {
+                        return Some(start + nlen - 1);
+                    }
+                }
+                if pos == min_rare_pos { break; }
+                pos -= 1;
+            }
+        }
+        None
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+struct RevTeddyInner {
     len: usize,
     num_simd: usize,
     masks: Box<TeddyMasks>,
-    pub(crate) sets: Vec<TSet>,
-    /// bytes between SIMD window's rightmost byte and reported match-end-1.
+    sets: Vec<TSet>,
     tail_offset: usize,
 }
 
 #[cfg(target_arch = "x86_64")]
-impl RevPrefixSearch {
+enum RevSearchInner {
+    Teddy(RevTeddyInner),
+    Literal(RevLiteralInner),
+}
+
+#[cfg(target_arch = "x86_64")]
+pub struct RevTeddySearch {
+    inner: RevSearchInner,
+}
+
+#[cfg(target_arch = "x86_64")]
+impl RevTeddySearch {
     pub fn new(
         len: usize,
         byte_sets_raw: &[Vec<u8>],
@@ -323,61 +561,87 @@ impl RevPrefixSearch {
         debug_assert_eq!(all_sets.len(), len);
         debug_assert_eq!(byte_sets_raw.len(), len);
 
-        let num_simd = len.min(3);
-        let masks = TeddyMasks::build(byte_sets_raw, num_simd);
+        let is_literal = byte_sets_raw.iter().all(|bs| bs.len() == 1);
+        if is_literal {
+            let needle: Vec<u8> = byte_sets_raw.iter().rev().map(|bs| bs[0]).collect();
 
-        Self {
-            len,
-            num_simd,
-            masks,
-            sets: all_sets,
-            tail_offset,
+            Self {
+                inner: RevSearchInner::Literal(RevLiteralInner::new(needle, tail_offset)),
+            }
+        } else {
+            let num_simd = len.min(3);
+            let masks = TeddyMasks::build(byte_sets_raw, num_simd);
+            Self {
+                inner: RevSearchInner::Teddy(RevTeddyInner {
+                    len,
+                    num_simd,
+                    masks,
+                    sets: all_sets,
+                    tail_offset,
+                }),
+            }
         }
     }
 
     pub fn add_tail_offset(mut self, extra: u32) -> Self {
-        self.tail_offset += extra as usize;
+        match &mut self.inner {
+            RevSearchInner::Teddy(t) => t.tail_offset += extra as usize,
+            RevSearchInner::Literal(l) => l.tail_offset += extra as usize,
+        }
         self
     }
 
     pub fn len(&self) -> usize {
-        self.len
+        match &self.inner {
+            RevSearchInner::Teddy(t) => t.len,
+            RevSearchInner::Literal(l) => l.needle.len(),
+        }
     }
 
     pub fn find_rev(&self, haystack: &[u8], end: usize) -> Option<usize> {
-        let end = end.min(haystack.len().saturating_sub(1));
-        let end = end.checked_sub(self.tail_offset)?;
-        let r = unsafe { self.find_rev_avx2(haystack, end) };
-        r.map(|p| p + self.tail_offset)
-    }
-
-    #[target_feature(enable = "avx2")]
-    unsafe fn find_rev_avx2(&self, haystack: &[u8], end: usize) -> Option<usize> {
-        match self.num_simd {
-            1 => self.teddy_rev::<1>(haystack, end),
-            2 => self.teddy_rev::<2>(haystack, end),
-            _ => self.teddy_rev::<3>(haystack, end),
+        match &self.inner {
+            RevSearchInner::Teddy(t) => {
+                let end = end.min(haystack.len().saturating_sub(1));
+                let end = end.checked_sub(t.tail_offset)?;
+                let r = unsafe { Self::find_rev_avx2_teddy(t, haystack, end) };
+                r.map(|p| p + t.tail_offset)
+            }
+            RevSearchInner::Literal(l) => {
+                let end = end.min(haystack.len().saturating_sub(1));
+                let end = end.checked_sub(l.tail_offset)?;
+                let r = l.find_rev(haystack, end);
+                r.map(|p| p + l.tail_offset)
+            }
         }
     }
 
     #[target_feature(enable = "avx2")]
-    unsafe fn teddy_rev<const N: usize>(&self, haystack: &[u8], end: usize) -> Option<usize> {
+    unsafe fn find_rev_avx2_teddy(t: &RevTeddyInner, haystack: &[u8], end: usize) -> Option<usize> {
+        match t.num_simd {
+            1 => Self::teddy_rev::<1>(t, haystack, end),
+            2 => Self::teddy_rev::<2>(t, haystack, end),
+            _ => Self::teddy_rev::<3>(t, haystack, end),
+        }
+    }
+
+    #[target_feature(enable = "avx2")]
+    unsafe fn teddy_rev<const N: usize>(t: &RevTeddyInner, haystack: &[u8], end: usize) -> Option<usize> {
         let ptr = haystack.as_ptr();
         let nib = _mm256_set1_epi8(0x0F);
-        let sets_ptr = self.sets.as_ptr();
-        let len = self.len;
+        let sets_ptr = t.sets.as_ptr();
+        let len = t.len;
         let min_pos = len - 1;
 
         if end < 31 + min_pos {
-            return self.verify_tail(haystack, end);
+            return Self::verify_tail_teddy(t, haystack, end);
         }
 
         let mut chunk_pos = end - 31;
 
         if N == 3 {
             while chunk_pos >= 64 + min_pos {
-                let mask_a = teddy_filter_rev::<N>(ptr, chunk_pos, &self.masks, nib);
-                let mask_b = teddy_filter_rev::<N>(ptr, chunk_pos - 32, &self.masks, nib);
+                let mask_a = teddy_filter_rev::<N>(ptr, chunk_pos, &t.masks, nib);
+                let mask_b = teddy_filter_rev::<N>(ptr, chunk_pos - 32, &t.masks, nib);
                 if mask_a != 0 {
                     if let Some(m) = Self::verify_rev_inline(ptr, chunk_pos, mask_a, sets_ptr, len)
                     {
@@ -396,7 +660,7 @@ impl RevPrefixSearch {
         }
 
         loop {
-            let mask = teddy_filter_rev::<N>(ptr, chunk_pos, &self.masks, nib);
+            let mask = teddy_filter_rev::<N>(ptr, chunk_pos, &t.masks, nib);
             if mask != 0 {
                 if let Some(m) = Self::verify_rev_inline(ptr, chunk_pos, mask, sets_ptr, len) {
                     return Some(m);
@@ -407,19 +671,18 @@ impl RevPrefixSearch {
             }
             chunk_pos -= 32;
         }
-        self.verify_tail(haystack, chunk_pos.saturating_sub(1).min(end))
+        Self::verify_tail_teddy(t, haystack, chunk_pos.saturating_sub(1).min(end))
     }
 
-    /// brute-force check for positions <= end (handles < 32 byte tails)
-    fn verify_tail(&self, haystack: &[u8], end: usize) -> Option<usize> {
-        let min_pos = self.len - 1;
+    fn verify_tail_teddy(t: &RevTeddyInner, haystack: &[u8], end: usize) -> Option<usize> {
+        let min_pos = t.len - 1;
         let mut pos = end;
         'outer: loop {
             if pos < min_pos {
                 return None;
             }
-            for i in 0..self.len {
-                if !self.sets[i].contains_byte(haystack[pos - i]) {
+            for i in 0..t.len {
+                if !t.sets[i].contains_byte(haystack[pos - i]) {
                     if pos == min_pos {
                         return None;
                     }
@@ -940,7 +1203,7 @@ pub struct RevSearchRanges {
 #[cfg(target_arch = "x86_64")]
 impl RevSearchRanges {
     pub fn new(ranges: Vec<(u8, u8)>) -> Self {
-        debug_assert!(!ranges.is_empty() && ranges.len() <= 3);
+        debug_assert!(!ranges.is_empty() && ranges.len() <= 4);
         Self { ranges }
     }
 
@@ -986,6 +1249,13 @@ impl RevSearchRanges {
                     let ge2 = _mm256_cmpeq_epi8(_mm256_max_epu8(chunk, lo2), chunk);
                     let le2 = _mm256_cmpeq_epi8(_mm256_min_epu8(chunk, hi2), chunk);
                     mask |= _mm256_movemask_epi8(_mm256_and_si256(ge2, le2)) as u32;
+                }
+                if n >= 4 {
+                    let lo3 = _mm256_set1_epi8(self.ranges[3].0 as i8);
+                    let hi3 = _mm256_set1_epi8(self.ranges[3].1 as i8);
+                    let ge3 = _mm256_cmpeq_epi8(_mm256_max_epu8(chunk, lo3), chunk);
+                    let le3 = _mm256_cmpeq_epi8(_mm256_min_epu8(chunk, hi3), chunk);
+                    mask |= _mm256_movemask_epi8(_mm256_and_si256(ge3, le3)) as u32;
                 }
                 mask
             }};

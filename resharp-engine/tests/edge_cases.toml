@@ -1,7 +1,12 @@
 description = '''
-edge cases: (?i), unicode byte offsets, dot-newline, nested booleans, quantified groups.
+basic edge cases
 '''
 
+[[test]]
+name = "intersect_overlap"
+pattern = '_*12e_*&_*34e_*&_*e5_*'
+input = "12e34ee5"
+matches = [[0, 8]]
 
 [[test]]
 name = "ci_literal"

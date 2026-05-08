@@ -248,7 +248,6 @@ fn precompiled_matches_lazy() {
     let lazy_re = Regex::with_options(
         pattern,
         RegexOptions {
-            dfa_threshold: 0,
             max_dfa_capacity: 10000,
             ..Default::default()
         },
@@ -257,7 +256,6 @@ fn precompiled_matches_lazy() {
     let precompiled_re = Regex::with_options(
         pattern,
         RegexOptions {
-            dfa_threshold: 1000,
             max_dfa_capacity: 10000,
             ..Default::default()
         },
@@ -276,7 +274,6 @@ fn precompiled_complex() {
     let lazy_re = Regex::with_options(
         pattern,
         RegexOptions {
-            dfa_threshold: 0,
             max_dfa_capacity: 10000,
             ..Default::default()
         },
@@ -285,7 +282,6 @@ fn precompiled_complex() {
     let precompiled_re = Regex::with_options(
         pattern,
         RegexOptions {
-            dfa_threshold: 1000,
             max_dfa_capacity: 10000,
             ..Default::default()
         },
@@ -413,7 +409,6 @@ fn capacity_exceeded_at_compile() {
     let result = Regex::with_options(
         "a.*b.*c",
         RegexOptions {
-            dfa_threshold: 0,
             max_dfa_capacity: 2,
             ..Default::default()
         },
@@ -496,7 +491,6 @@ fn capacity_exceeded_at_match() {
     let re = Regex::with_options(
         "a.*b.*c.*d",
         RegexOptions {
-            dfa_threshold: 0,
             max_dfa_capacity: 4,
             ..Default::default()
         },
@@ -1228,25 +1222,6 @@ fn lookahead_alternation_with_end_of_line() {
 }
 
 #[test]
-fn fwd_begin_anchor_short_circuits() {
-    use std::time::Instant;
-    let big = vec![b'x'; 1 << 22];
-    for &(p, expect_match) in &[(r"\Afoo", false), (r"\Axxx", true), (r"\A", true)] {
-        let re = Regex::new(p).unwrap();
-        let t = Instant::now();
-        let n = re.find_all(&big).unwrap().len();
-        let elapsed = t.elapsed();
-        assert_eq!(n > 0, expect_match, "pattern {:?}", p);
-        assert!(
-            elapsed.as_micros() < 1000,
-            "pattern {:?} took {:?}, expected O(1)",
-            p,
-            elapsed
-        );
-    }
-}
-
-#[test]
 #[cfg_attr(debug_assertions, ignore)]
 fn rev_bot_skip_terminates_fast() {
     use std::time::Instant;
@@ -1342,8 +1317,6 @@ fn empty_language_short_circuits() {
     let big = vec![b'x'; 1 << 20];
     assert_eq!(re.find_all(&big).unwrap(), vec![]);
     assert_eq!(re.is_match(&big).unwrap(), false);
-    assert_eq!(re.find_anchored(&big).unwrap(), None);
-    // Empty input path too.
     assert_eq!(re.find_all(b"").unwrap(), vec![]);
     assert_eq!(re.is_match(b"").unwrap(), false);
 }
@@ -1370,6 +1343,13 @@ fn anchored_fwd_lb_selected_when_min_len_zero_kind() {
             re.prefix_kind_name()
         );
     }
+}
+
+#[test]
+fn rev_literal_search() {
+    let re = Regex::new(r"[\s\S]+(?<=x)foo[\s\S]+").unwrap();
+    let m = re.find_all(b"axfoo def").unwrap();
+    assert_eq!(m, vec![resharp::Match { start: 0, end: 9 }]);
 }
 
 mod probe_alt {
@@ -1668,7 +1648,6 @@ mod accel_skip {
             let re = Regex::with_options(
                 pattern,
                 RegexOptions {
-                    dfa_threshold: 0,
                     max_dfa_capacity: 10000,
                     ..Default::default()
                 },

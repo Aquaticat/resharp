@@ -12,6 +12,7 @@ fn auto_harden_toml() {
     for t in tests {
         let pattern = t["pattern"].as_str().unwrap();
         let expected = t["hardened"].as_bool().unwrap();
+        let expected_fwd = t.get("fwd").and_then(|v| v.as_bool());
         let re = Regex::new(pattern).expect("pattern compiles");
         assert_eq!(
             re.is_hardened(),
@@ -21,6 +22,16 @@ fn auto_harden_toml() {
             expected,
             re.is_hardened()
         );
+        if let Some(fwd) = expected_fwd {
+            assert_eq!(
+                re.has_fwd_prefix(),
+                fwd,
+                "pattern={:?}: expected has_fwd_prefix={}, got {}",
+                pattern,
+                fwd,
+                re.has_fwd_prefix()
+            );
+        }
 
         if expected {
             let hardened =

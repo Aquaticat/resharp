@@ -1,15 +1,24 @@
 # RE# syntax
 
-RE# supports standard regex syntax plus three extensions: intersection (`&`), complement (`~`), and a universal wildcard (`_`).
+RE# supports standard regex syntax plus three extensions: intersection (`&`), complement (`~`), and an any-byte wildcard (`_`).
+
+## Key differences from other engines
+
+- `_` matches any byte; for a literal underscore use `\_`.
+- `&` means AND, `~` means NOT, `|` means OR.
+- Matches are leftmost-longest: `y|yes` on `"yes"` matches `"yes"`, not `"y"`. Order doesn't matter.
+- `(...)` never captures; RE# does not support capture groups as of now.
+- `^` and `$` are start/end of **line** by default. Turn off with `(?-m)` to make them start/end of string.
+- Lookarounds cannot nest or appear inside `~(...)` or `*`.
 
 ## Intuition
 
 ```
-_*              any string
-a_*             any string that starts with 'a'
-_*a             any string that ends with 'a'
-_*a_*           any string that contains 'a'
-~(_*a_*)        any string that does NOT contain 'a'
+_*                any string
+a_*               any string that starts with 'a'
+_*a               any string that ends with 'a'
+_*a_*             any string that contains 'a'
+~(_*a_*)          any string that does NOT contain 'a'
 (_*a_*)&~(_*b_*)  contains 'a' AND does not contain 'b'
 (?<=b)_*&_*(?=a)  preceded by 'b' AND followed by 'a'
 ```
@@ -26,7 +35,7 @@ You combine all of these with `&` to get more complex patterns.
 
 ## Extensions
 
-### `_`: universal wildcard
+### `_`: any byte
 
 Matches any single byte including newlines. `_*` means "any string".
 
@@ -179,6 +188,8 @@ You can also use explicit ranges: `[\u{0900}-\u{097F}]`.
 | `\z` | end of string |
 | `\b` | word boundary (unicode, see below) |
 
+Multiline is **on by default**: `^`/`$` match at `\n` and at text boundaries. Disable with `(?-m)` or `RegexOptions::multi_line(false)` to make them equivalent to `\A`/`\z`.
+
 ### Lookarounds
 
 | Pattern | Description |
@@ -217,11 +228,4 @@ Flags apply from the point they appear until the end of the enclosing group.
 
 Matches are **leftmost-longest**. This differs from most regex engines which use leftmost-greedy (PCRE). Lazy quantifiers (`*?`, `+?`, `??`, `{n,m}?`) are not supported and will produce a parse error.
 
-Alternation order does not affect what gets matched; only length does. For `y|yes|n|no` against `yes please`:
-
-| Engine | Match |
-|--------|-------|
-| RE# (leftmost-longest) | `yes` |
-| PCRE / Rust `regex` (leftmost-greedy) | `y` |
-
-For predictable longest-match behavior, alternative order is irrelevant: `yes|y|no|n` and `y|yes|n|no` both match `yes` in RE#.
+Alternation order does not affect what gets matched; only length does. For `y|yes|n|no` against `yes please`, RE# matches `yes`, while PCRE / Rust `regex` match `y`.

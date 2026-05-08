@@ -2102,7 +2102,7 @@ impl RegexBuilder {
     }
     pub fn prune_begin_eps(&mut self, node_id: NodeId) -> NodeId {
         match self.get_kind(node_id) {
-            Kind::Begin => NodeId::BOT,
+            Kind::Begin => NodeId::EPS,
             Kind::Concat => {
                 let head = self.prune_begin_eps(node_id.left(self));
                 let tail = self.prune_begin_eps(node_id.right(self));
@@ -2184,14 +2184,19 @@ impl RegexBuilder {
         }
     }
 
+    pub fn prefix_ts(&mut self, node_id: NodeId) -> NodeId {
+        let with_ts = if node_id.is_concat(self) && node_id.left(self) == NodeId::BEGIN {
+            node_id
+        } else {
+            self.mk_concat(NodeId::TS, node_id)
+        };
+        with_ts
+    }
+
     pub fn ts_rev_start(&mut self, node_id: NodeId) -> Result<NodeId, ResharpError> {
         let rev = self.reverse(node_id)?;
         let rev = self.normalize_rev(rev)?;
-        let with_ts = if rev.is_concat(self) && rev.left(self) == NodeId::BEGIN {
-            rev
-        } else {
-            self.mk_concat(NodeId::TS, rev)
-        };
+        let with_ts = self.prefix_ts(rev);
         Ok(self.simplify_rev_initial(with_ts))
     }
 
@@ -2392,10 +2397,18 @@ impl RegexBuilder {
         if cfg!(feature = "norewrite") {
             return None;
         }
-        #[cfg(debug_assertions)]
-        if std::env::var("TRACE_CONCAT").is_ok() {
-            eprintln!("rw2 head={} tail={}", self.pp(head), self.pp(tail));
-        }
+
+        // match tail {
+        //     // breaks:rev
+        //     NodeId::BEGIN => {
+        //         if !self.is_nullable(head, Nullability::BEGIN) {
+        //             return NodeId::BOT;
+        //         } else {
+        //             return NodeId::BEGIN;
+        //         }
+        //     }
+        //     _ => {}
+        // }
 
         if tail.is_lookbehind(self) {
             let lbleft = self.mk_concat(head, self.get_lookbehind_prev(tail).missing_to_eps());
@@ -2991,18 +3004,6 @@ impl RegexBuilder {
             return head;
         }
 
-        match tail {
-            // breaks:rev
-            NodeId::BEGIN => {
-                if !self.is_nullable(head, Nullability::BEGIN) {
-                    return NodeId::BOT;
-                } else {
-                    return NodeId::BEGIN;
-                }
-            }
-            _ => {}
-        }
-
         // normalize concats to right
         if head.is_kind(self, Kind::Concat) {
             let left = head.left(self);
@@ -3104,7 +3105,6 @@ impl RegexBuilder {
     }
 
     pub fn mk_lookahead(&mut self, la_body: NodeId, la_tail: NodeId, rel: u32) -> NodeId {
-        // flatten LA(LA(Y, MIS, 0), MIS, 0) → LA(Y, MIS, 0)
         let la_body = if la_tail.is_missing() && rel == 0 {
             self.flatten_la_body(la_body)
         } else {
@@ -3541,6 +3541,98 @@ impl RegexBuilder {
         let mut s = String::new();
         self.ppw(&mut s, node_id).unwrap();
         s
+    }
+
+    /// xa|ya => (x|y)a suffix factoring
+    /// used only for pretty-printing in to_pattern
+    pub fn factor_suffixes(&mut self, node: NodeId) -> Result<NodeId, ResharpError> {
+        let mut memo = FxHashMap::default();
+        self.factor_suffixes_rec(node, &mut memo)
+    }
+
+    fn factor_suffixes_rec(
+        &mut self,
+        node: NodeId,
+        memo: &mut FxHashMap<NodeId, NodeId>,
+    ) -> Result<NodeId, ResharpError> {
+        if let Some(&v) = memo.get(&node) {
+            return Ok(v);
+        }
+        let result = match self.get_kind(node) {
+            Kind::Pred | Kind::Begin | Kind::End => node,
+            Kind::Star => {
+                let inner = self.factor_suffixes_rec(node.left(self), memo)?;
+                self.mk_star(inner)
+            }
+            Kind::Compl => {
+                let inner = self.factor_suffixes_rec(node.left(self), memo)?;
+                self.mk_compl(inner)
+            }
+            Kind::Concat => {
+                let l = self.factor_suffixes_rec(node.left(self), memo)?;
+                let r = self.factor_suffixes_rec(node.right(self), memo)?;
+                self.mk_concat(l, r)
+            }
+            Kind::Inter => {
+                let l = self.factor_suffixes_rec(node.left(self), memo)?;
+                let r = self.factor_suffixes_rec(node.right(self), memo)?;
+                self.mk_inter(l, r)
+            }
+            Kind::Union => {
+                let mut comps: Vec<NodeId> = Vec::new();
+                node.iter_union(self, &mut |_, c| comps.push(c));
+                let mut factored: Vec<NodeId> = Vec::with_capacity(comps.len());
+                let mut reversible = true;
+                for c in &comps {
+                    let f = self.factor_suffixes_rec(*c, memo)?;
+                    if c.contains_lookaround(self)
+                        || c.flags_contains(self).has(MetaFlags::CONTAINS_ANCHORS)
+                    {
+                        reversible = false;
+                    }
+                    factored.push(f);
+                }
+                if !reversible || factored.len() < 2 {
+                    let mut acc = factored[0];
+                    for c in factored.into_iter().skip(1) {
+                        acc = self.mk_union(acc, c);
+                    }
+                    acc
+                } else {
+                    let mut rev_comps: Vec<NodeId> = Vec::with_capacity(factored.len());
+                    for c in factored {
+                        rev_comps.push(self.reverse(c)?);
+                    }
+                    let mut acc = rev_comps[0];
+                    for c in rev_comps.into_iter().skip(1) {
+                        acc = self.mk_union(acc, c);
+                    }
+                    self.reverse(acc)?
+                }
+            }
+            Kind::Lookahead => {
+                let inner = self.get_lookahead_inner(node);
+                let tail = self.get_lookahead_tail(node);
+                let rel = self.get_lookahead_rel(node);
+                let ni = self.factor_suffixes_rec(inner, memo)?;
+                let nt = self.factor_suffixes_rec(tail, memo)?;
+                self.mk_lookahead(ni, nt, rel)
+            }
+            Kind::Lookbehind => {
+                let inner = self.get_lookbehind_inner(node);
+                let prev = self.get_lookbehind_prev(node);
+                let ni = self.factor_suffixes_rec(inner, memo)?;
+                let np = if prev != NodeId::MISSING {
+                    self.factor_suffixes_rec(prev, memo)?
+                } else {
+                    prev
+                };
+                self.mk_lookbehind(ni, np)
+            }
+            Kind::Counted => node,
+        };
+        memo.insert(node, result);
+        Ok(result)
     }
 
     #[allow(dead_code)]
@@ -3995,24 +4087,30 @@ impl RegexBuilder {
                 if let Some(rewritten) = self.try_begin_neg_pred_rewrite(r) {
                     return rewritten;
                 }
-                let (head, tail) = if r.is_concat(self) {
+                let (tail1, tail2) = if r.is_concat(self) {
                     (r.left(self), r.right(self))
                 } else {
                     (r, NodeId::EPS)
                 };
-                if self.get_kind(head) != Kind::Union {
+
+                if tail1.is_begin() {
+                    return r;
+                }
+
+                if self.get_kind(tail1) != Kind::Union {
                     return self.mk_concat(l, r);
                 }
-                if !head.left(self).is_begin() {
+                if !tail1.left(self).is_begin() {
                     return self.mk_concat(l, r);
                 }
-                let y = head.right(self);
+                let y = tail1.right(self);
                 if !y.is_pred(self) {
                     return self.mk_concat(l, r);
                 }
-                if tail.is_concat(self) {
-                    let tl = tail.left(self);
-                    let tr = tail.right(self);
+                if tail2.is_concat(self) {
+                    let tl = tail2.left(self);
+                    let tr = tail2.right(self);
+
                     let y_tset = y.pred_tset(self);
                     let covers_all = if tl == NodeId::TS {
                         true

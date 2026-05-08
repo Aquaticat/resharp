@@ -126,7 +126,7 @@ pub struct RevSearchRanges {
 
 impl RevSearchRanges {
     pub fn new(ranges: Vec<(u8, u8)>) -> Self {
-        debug_assert!(!ranges.is_empty() && ranges.len() <= 3);
+        debug_assert!(!ranges.is_empty() && ranges.len() <= 4);
         Self { ranges }
     }
 
@@ -171,12 +171,27 @@ impl RevSearchRanges {
         } else {
             hi0
         };
+        let lo3 = if n >= 4 {
+            vdupq_n_u8(self.ranges[3].0)
+        } else {
+            lo0
+        };
+        let hi3 = if n >= 4 {
+            vdupq_n_u8(self.ranges[3].1)
+        } else {
+            hi0
+        };
 
         macro_rules! compute_combined {
             ($chunk:expr) => {{
                 let chunk = $chunk;
                 let in0 = vandq_u8(vcgeq_u8(chunk, lo0), vcleq_u8(chunk, hi0));
-                if n >= 3 {
+                if n >= 4 {
+                    let in1 = vandq_u8(vcgeq_u8(chunk, lo1), vcleq_u8(chunk, hi1));
+                    let in2 = vandq_u8(vcgeq_u8(chunk, lo2), vcleq_u8(chunk, hi2));
+                    let in3 = vandq_u8(vcgeq_u8(chunk, lo3), vcleq_u8(chunk, hi3));
+                    vorrq_u8(vorrq_u8(in0, in1), vorrq_u8(in2, in3))
+                } else if n >= 3 {
                     let in1 = vandq_u8(vcgeq_u8(chunk, lo1), vcleq_u8(chunk, hi1));
                     let in2 = vandq_u8(vcgeq_u8(chunk, lo2), vcleq_u8(chunk, hi2));
                     vorrq_u8(in0, vorrq_u8(in1, in2))
@@ -462,15 +477,24 @@ impl FwdLiteralSearch {
 }
 
 #[cfg_attr(debug_assertions, derive(Debug))]
-pub struct RevPrefixSearch {
+struct RevTeddyInner {
     len: usize,
     num_simd: usize,
     masks: Box<TeddyMasks>,
-    pub(crate) sets: Vec<TSet>,
+    sets: Vec<TSet>,
     tail_offset: usize,
 }
 
-impl RevPrefixSearch {
+enum RevSearchInner {
+    Teddy(RevTeddyInner),
+    Literal(super::RevLiteralInner),
+}
+
+pub struct RevTeddySearch {
+    inner: RevSearchInner,
+}
+
+impl RevTeddySearch {
     pub fn new(
         len: usize,
         byte_sets_raw: &[Vec<u8>],
@@ -479,6 +503,13 @@ impl RevPrefixSearch {
     ) -> Self {
         debug_assert_eq!(all_sets.len(), len);
         debug_assert_eq!(byte_sets_raw.len(), len);
+
+        if byte_sets_raw.iter().all(|bs| bs.len() == 1) {
+            let needle: Vec<u8> = byte_sets_raw.iter().rev().map(|bs| bs[0]).collect();
+            return Self {
+                inner: RevSearchInner::Literal(super::RevLiteralInner::new(needle, tail_offset)),
+            };
+        }
 
         let num_simd = len.min(3);
         let mut masks = Box::new(TeddyMasks {
@@ -500,47 +531,70 @@ impl RevPrefixSearch {
         }
 
         Self {
-            len,
-            num_simd,
-            masks,
-            sets: all_sets,
-            tail_offset,
+            inner: RevSearchInner::Teddy(RevTeddyInner {
+                len,
+                num_simd,
+                masks,
+                sets: all_sets,
+                tail_offset,
+            }),
         }
     }
 
     pub fn add_tail_offset(mut self, extra: u32) -> Self {
-        self.tail_offset += extra as usize;
+        match &mut self.inner {
+            RevSearchInner::Teddy(t) => t.tail_offset += extra as usize,
+            RevSearchInner::Literal(l) => l.tail_offset += extra as usize,
+        }
         self
     }
 
     pub fn len(&self) -> usize {
-        self.len
+        match &self.inner {
+            RevSearchInner::Teddy(t) => t.len,
+            RevSearchInner::Literal(l) => l.len(),
+        }
     }
 
     pub fn find_rev(&self, haystack: &[u8], end: usize) -> Option<usize> {
-        let end = end.min(haystack.len().saturating_sub(1));
-        let end = end.checked_sub(self.tail_offset)?;
-        let r = unsafe {
-            match self.num_simd {
-                1 => self.teddy_rev_1(haystack, end),
-                2 => self.teddy_rev_2(haystack, end),
-                _ => self.teddy_rev_3(haystack, end),
+        match &self.inner {
+            RevSearchInner::Teddy(t) => {
+                let end = end.min(haystack.len().saturating_sub(1));
+                let end = match end.checked_sub(t.tail_offset) {
+                    Some(e) => e,
+                    None => return None,
+                };
+                let r = unsafe {
+                    match t.num_simd {
+                        1 => Self::teddy_rev_1(t, haystack, end),
+                        2 => Self::teddy_rev_2(t, haystack, end),
+                        _ => Self::teddy_rev_3(t, haystack, end),
+                    }
+                };
+                r.map(|p| p + t.tail_offset)
             }
-        };
-        r.map(|p| p + self.tail_offset)
+            RevSearchInner::Literal(l) => {
+                let end = end.min(haystack.len().saturating_sub(1));
+                let end = match end.checked_sub(l.tail_offset) {
+                    Some(e) => e,
+                    None => return None,
+                };
+                l.find_rev(haystack, end).map(|p| p + l.tail_offset)
+            }
+        }
     }
 
-    unsafe fn teddy_rev_1(&self, haystack: &[u8], end: usize) -> Option<usize> {
+    unsafe fn teddy_rev_1(t: &RevTeddyInner, haystack: &[u8], end: usize) -> Option<usize> {
         let ptr = haystack.as_ptr();
         let nib = vdupq_n_u8(0x0F);
-        let vlo0 = vld1q_u8(self.masks.lo[0].as_ptr());
-        let vhi0 = vld1q_u8(self.masks.hi[0].as_ptr());
-        let sets_ptr = self.sets.as_ptr();
-        let len = self.len;
+        let vlo0 = vld1q_u8(t.masks.lo[0].as_ptr());
+        let vhi0 = vld1q_u8(t.masks.hi[0].as_ptr());
+        let sets_ptr = t.sets.as_ptr();
+        let len = t.len;
         let min_pos = len - 1;
 
         if end < 15 + min_pos {
-            return self.verify_tail(haystack, end);
+            return Self::verify_tail_teddy(t, haystack, end);
         }
 
         let mut chunk_pos = end - 15;
@@ -562,22 +616,22 @@ impl RevPrefixSearch {
             }
             chunk_pos -= 16;
         }
-        self.verify_tail(haystack, chunk_pos.saturating_sub(1).min(end))
+        Self::verify_tail_teddy(t, haystack, chunk_pos.saturating_sub(1).min(end))
     }
 
-    unsafe fn teddy_rev_2(&self, haystack: &[u8], end: usize) -> Option<usize> {
+    unsafe fn teddy_rev_2(t: &RevTeddyInner, haystack: &[u8], end: usize) -> Option<usize> {
         let ptr = haystack.as_ptr();
         let nib = vdupq_n_u8(0x0F);
-        let vlo0 = vld1q_u8(self.masks.lo[0].as_ptr());
-        let vhi0 = vld1q_u8(self.masks.hi[0].as_ptr());
-        let vlo1 = vld1q_u8(self.masks.lo[1].as_ptr());
-        let vhi1 = vld1q_u8(self.masks.hi[1].as_ptr());
-        let sets_ptr = self.sets.as_ptr();
-        let len = self.len;
+        let vlo0 = vld1q_u8(t.masks.lo[0].as_ptr());
+        let vhi0 = vld1q_u8(t.masks.hi[0].as_ptr());
+        let vlo1 = vld1q_u8(t.masks.lo[1].as_ptr());
+        let vhi1 = vld1q_u8(t.masks.hi[1].as_ptr());
+        let sets_ptr = t.sets.as_ptr();
+        let len = t.len;
         let min_pos = len - 1;
 
         if end < 15 + min_pos {
-            return self.verify_tail(haystack, end);
+            return Self::verify_tail_teddy(t, haystack, end);
         }
 
         let mut chunk_pos = end - 15;
@@ -605,24 +659,24 @@ impl RevPrefixSearch {
             }
             chunk_pos -= 16;
         }
-        self.verify_tail(haystack, chunk_pos.saturating_sub(1).min(end))
+        Self::verify_tail_teddy(t, haystack, chunk_pos.saturating_sub(1).min(end))
     }
 
-    unsafe fn teddy_rev_3(&self, haystack: &[u8], end: usize) -> Option<usize> {
+    unsafe fn teddy_rev_3(t: &RevTeddyInner, haystack: &[u8], end: usize) -> Option<usize> {
         let ptr = haystack.as_ptr();
         let nib = vdupq_n_u8(0x0F);
-        let vlo0 = vld1q_u8(self.masks.lo[0].as_ptr());
-        let vhi0 = vld1q_u8(self.masks.hi[0].as_ptr());
-        let vlo1 = vld1q_u8(self.masks.lo[1].as_ptr());
-        let vhi1 = vld1q_u8(self.masks.hi[1].as_ptr());
-        let vlo2 = vld1q_u8(self.masks.lo[2].as_ptr());
-        let vhi2 = vld1q_u8(self.masks.hi[2].as_ptr());
-        let sets_ptr = self.sets.as_ptr();
-        let len = self.len;
+        let vlo0 = vld1q_u8(t.masks.lo[0].as_ptr());
+        let vhi0 = vld1q_u8(t.masks.hi[0].as_ptr());
+        let vlo1 = vld1q_u8(t.masks.lo[1].as_ptr());
+        let vhi1 = vld1q_u8(t.masks.hi[1].as_ptr());
+        let vlo2 = vld1q_u8(t.masks.lo[2].as_ptr());
+        let vhi2 = vld1q_u8(t.masks.hi[2].as_ptr());
+        let sets_ptr = t.sets.as_ptr();
+        let len = t.len;
         let min_pos = len - 1;
 
         if end < 15 + min_pos {
-            return self.verify_tail(haystack, end);
+            return Self::verify_tail_teddy(t, haystack, end);
         }
 
         let mut chunk_pos = end - 15;
@@ -719,18 +773,18 @@ impl RevPrefixSearch {
             }
             chunk_pos -= 16;
         }
-        self.verify_tail(haystack, chunk_pos.saturating_sub(1).min(end))
+        Self::verify_tail_teddy(t, haystack, chunk_pos.saturating_sub(1).min(end))
     }
 
-    fn verify_tail(&self, haystack: &[u8], end: usize) -> Option<usize> {
-        let min_pos = self.len - 1;
+    fn verify_tail_teddy(t: &RevTeddyInner, haystack: &[u8], end: usize) -> Option<usize> {
+        let min_pos = t.len - 1;
         let mut pos = end;
         'outer: loop {
             if pos < min_pos {
                 return None;
             }
-            for i in 0..self.len {
-                if !self.sets[i].contains_byte(haystack[pos - i]) {
+            for i in 0..t.len {
+                if !t.sets[i].contains_byte(haystack[pos - i]) {
                     if pos == min_pos {
                         return None;
                     }
@@ -1255,7 +1309,7 @@ mod tests {
         // single position: match byte 'c'
         let sets_raw = vec![vec![b'c']];
         let all_sets = vec![TSet::from_bytes(&[b'c'])];
-        let s = RevPrefixSearch::new(1, &sets_raw, all_sets, 0);
+        let s = RevTeddySearch::new(1, &sets_raw, all_sets, 0);
         assert_eq!(s.find_rev(b"xxcxx", 4), Some(2));
         assert_eq!(s.find_rev(b"xxxxx", 4), None);
         // long haystack
@@ -1268,7 +1322,7 @@ mod tests {
     fn rev_prefix_teddy2() {
         let sets_raw = vec![vec![b'c'], vec![b'b']];
         let all_sets = vec![TSet::from_bytes(&[b'c']), TSet::from_bytes(&[b'b'])];
-        let s = RevPrefixSearch::new(2, &sets_raw, all_sets, 0);
+        let s = RevTeddySearch::new(2, &sets_raw, all_sets, 0);
         assert_eq!(s.find_rev(b"xxbcxx", 5), Some(3));
         assert_eq!(s.find_rev(b"xxxcxx", 5), None);
         let mut hay = vec![b'.'; 50];
@@ -1311,7 +1365,7 @@ mod tests {
             TSet::from_bytes(&[b'b']),
             TSet::from_bytes(&[b'a']),
         ];
-        let s = RevPrefixSearch::new(3, &sets_raw, all_sets, 0);
+        let s = RevTeddySearch::new(3, &sets_raw, all_sets, 0);
         // short (scalar tail)
         assert_eq!(s.find_rev(b"xxabcxx", 6), Some(4));
         // 50 bytes - SIMD loop
@@ -1350,7 +1404,7 @@ mod tests {
         let vowels: Vec<u8> = vec![b'a', b'e', b'i', b'o', b'u'];
         let sets_raw = vec![vowels.clone()];
         let all_sets = vec![TSet::from_bytes(&vowels)];
-        let s = RevPrefixSearch::new(1, &sets_raw, all_sets, 0);
+        let s = RevTeddySearch::new(1, &sets_raw, all_sets, 0);
         let mut hay = vec![b'.'; 50];
         hay[35] = b'o';
         assert_eq!(s.find_rev(&hay, 49), Some(35));
@@ -1403,7 +1457,7 @@ mod tests {
     fn rev_prefix_at_chunk_boundaries() {
         let sets_raw = vec![vec![b'X']];
         let all_sets = vec![TSet::from_bytes(&[b'X'])];
-        let s = RevPrefixSearch::new(1, &sets_raw, all_sets, 0);
+        let s = RevTeddySearch::new(1, &sets_raw, all_sets, 0);
         let mut hay = vec![b'.'; 50];
         // match at position 15
         hay[15] = b'X';
@@ -1441,7 +1495,7 @@ mod tests {
     fn rev_prefix_size_sweep() {
         let sets_raw = vec![vec![b'c'], vec![b'b']];
         let all_sets = vec![TSet::from_bytes(&[b'c']), TSet::from_bytes(&[b'b'])];
-        let s = RevPrefixSearch::new(2, &sets_raw, all_sets, 0);
+        let s = RevTeddySearch::new(2, &sets_raw, all_sets, 0);
         for size in 3..=80 {
             let mut hay = vec![b'.'; size];
             hay[1] = b'b';
@@ -1534,7 +1588,7 @@ mod tests {
     fn rev_prefix_no_nibble_collision() {
         let sets_raw = vec![vec![b'c']];
         let all_sets = vec![TSet::from_bytes(&[b'c'])];
-        let s = RevPrefixSearch::new(1, &sets_raw, all_sets, 0);
+        let s = RevTeddySearch::new(1, &sets_raw, all_sets, 0);
         // 'c' = 0x63, 's' = 0x73 - same low nibble
         let hay = vec![b's'; 50];
         assert_eq!(s.find_rev(&hay, 49), None);
@@ -1544,7 +1598,7 @@ mod tests {
     fn rev_prefix_finds_last() {
         let sets_raw = vec![vec![b'X']];
         let all_sets = vec![TSet::from_bytes(&[b'X'])];
-        let s = RevPrefixSearch::new(1, &sets_raw, all_sets, 0);
+        let s = RevTeddySearch::new(1, &sets_raw, all_sets, 0);
         let mut hay = vec![b'.'; 50];
         hay[10] = b'X';
         hay[20] = b'X';
@@ -1597,7 +1651,7 @@ mod tests {
             TSet::from_bytes(&[b'b']),
             TSet::from_bytes(&[b'a']),
         ];
-        let s = RevPrefixSearch::new(3, &sets_raw, all_sets, 0);
+        let s = RevTeddySearch::new(3, &sets_raw, all_sets, 0);
         // 80 bytes: match early, found during second chunk of double-pump
         let mut hay = vec![b'.'; 80];
         hay[20] = b'a';

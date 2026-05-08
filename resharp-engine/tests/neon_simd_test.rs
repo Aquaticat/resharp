@@ -2,7 +2,6 @@ use resharp::{Regex, RegexOptions};
 
 fn lazy_opts() -> RegexOptions {
     RegexOptions {
-        dfa_threshold: 0,
         max_dfa_capacity: 10000,
         ..Default::default()
     }

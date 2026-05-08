@@ -39,7 +39,6 @@ fn accel_skip_lazy() {
         let re = Regex::with_options(
             pattern,
             RegexOptions {
-                dfa_threshold: 0,
                 max_dfa_capacity: 10000,
                 ..Default::default()
             },

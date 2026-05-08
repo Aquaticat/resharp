@@ -1,7 +1,7 @@
 use resharp_algebra::nulls::Nullability;
 use resharp_algebra::solver::{Solver, TSetId};
 use resharp_algebra::{Kind, NodeId, RegexBuilder};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::Error;
 
@@ -109,8 +109,13 @@ pub fn calc_potential_start(
 ) -> Result<Vec<TSetId>, crate::Error> {
     let mut nodes: BTreeSet<NodeId> = BTreeSet::new();
     nodes.insert(initial_node);
+    let mut depth: BTreeMap<NodeId, usize> = BTreeMap::new();
+    depth.insert(initial_node, 0);
 
     let mut result = Vec::new();
+    let mut step: usize = 0;
+
+    let mut sat_stack: Vec<(resharp_algebra::TRegexId, TSetId)> = Vec::new();
 
     loop {
         if nodes.is_empty() || nodes.len() > max_frontier_size || result.len() >= max_prefix_len {
@@ -123,24 +128,24 @@ pub fn calc_potential_start(
 
         let mut union_set = TSetId::EMPTY;
         let mut next_nodes: BTreeSet<NodeId> = BTreeSet::new();
+        let next_step = step + 1;
 
         for &node in &nodes.clone() {
             let der = b
                 .der(node, Nullability::CENTER)
                 .map_err(crate::Error::Algebra)?;
-            let mut targets: Vec<(NodeId, TSetId)> = Vec::new();
-            b.collect_der_targets(der, TSetId::FULL, &mut targets);
-
-            for &(target, char_set) in &targets {
+            sat_stack.push((der, TSetId::FULL));
+            b.iter_sat(&mut sat_stack, &mut |b, target, char_set| {
                 if exclude_initial && target == initial_node {
-                    continue;
+                    return;
                 }
                 if target == NodeId::BOT {
-                    continue;
+                    return;
                 }
                 union_set = b.solver().or_id(union_set, char_set);
                 next_nodes.insert(target);
-            }
+                depth.entry(target).or_insert(next_step);
+            });
         }
 
         if next_nodes.is_empty() || union_set == TSetId::EMPTY {
@@ -152,10 +157,71 @@ pub fn calc_potential_start(
 
         result.push(union_set);
         nodes = next_nodes;
+        step = next_step;
     }
 
     Ok(result)
 }
+
+
+
+fn collect_loop_factored_bodies(b: &RegexBuilder, init: NodeId) -> Option<Vec<NodeId>> {
+    let mut bodies = Vec::new();
+    let mut stack = vec![init];
+    while let Some(n) = stack.pop() {
+        if b.get_kind(n) == Kind::Inter {
+            stack.push(n.left(b));
+            stack.push(n.right(b));
+        } else if b.get_kind(n) == Kind::Concat && n.left(b) == NodeId::TS {
+            bodies.push(n.right(b));
+        } else {
+            return None;
+        }
+    }
+    Some(bodies)
+}
+
+fn synthesize_inter_constraint(b: &mut RegexBuilder, init: NodeId) -> Option<NodeId> {
+    if b.get_kind(init) != Kind::Inter {
+        return None;
+    }
+    let bodies = collect_loop_factored_bodies(b, init)?;
+    if bodies.is_empty() {
+        return None;
+    }
+    Some(b.mk_unions(bodies.into_iter()))
+}
+
+pub(crate) fn calc_combined_prefix(
+    b: &mut RegexBuilder,
+    init: NodeId,
+    fingerprint_depth: usize,
+    max_prefix_len: usize,
+    max_frontier_size: usize,
+) -> Result<Vec<TSetId>, crate::Error> {
+    let potential = calc_potential_start(b, init, max_prefix_len, max_frontier_size, true)?;
+    let head = if let Some(c) = synthesize_inter_constraint(b, init) {
+        let constrained = b.mk_inter(init, c);
+        let mut h = calc_potential_start(b, constrained, fingerprint_depth, max_frontier_size, false)?;
+        h.truncate(fingerprint_depth);
+        h
+    } else {
+        Vec::new()
+    };
+    if head.is_empty() {
+        return Ok(potential);
+    }
+    let mut out = potential;
+    if out.len() < head.len() {
+        return Ok(head);
+    }
+    for (i, &h) in head.iter().enumerate() {
+        out[i] = b.solver().and_id(out[i], h);
+    }
+    Ok(out)
+}
+
+
 
 #[derive(Clone, Debug)]
 pub struct PrefixSet {
@@ -164,25 +230,20 @@ pub struct PrefixSet {
     pub cost: u64,
 }
 
-/// Prefix sets for both directions
+/// Prefix sets for both directions.
 pub struct PrefixSets {
-    /// Tight anchored fwd prefix.  Every match starts exactly at a SIMD hit.
-    // pub fwd_anchored: PrefixSet,
     /// Potential-start fwd sets (full node, self-loop bytes included).
     pub fwd_potential: PrefixSet,
     /// Potential-start fwd sets after stripping a leading `_*`.
     pub fwd_potential_stripped: PrefixSet,
-    /// Tight anchored rev prefix.  Every match ends with this byte sequence
-    /// (read right-to-left).
+    /// Tight anchored rev prefix (right-to-left).
     pub rev_anchored: PrefixSet,
-    /// Potential-start rev sets.
+    /// Fingerprint head intersected with potential-start tail; narrower than bare potential-start.
     pub rev_potential: PrefixSet,
 }
 
 impl PrefixSets {
-    /// Compute all prefix-set sequences for `node` (fwd) and `rev_start`
-    /// (already reversed, not yet stripped), along with body shape and the
-    /// estimated per-byte scan costs for each direction.
+    /// Compute all prefix sets for `node` (fwd) and `rev_start` (reversed, not yet stripped).
     pub fn compute(
         b: &mut RegexBuilder,
         node: NodeId,
@@ -191,17 +252,16 @@ impl PrefixSets {
         let fwd_body = strip_leading_lookbehind(b, node);
         let stripped_node = b.strip_prefix_safe(node);
         let fwd_body_stripped = strip_leading_lookbehind(b, stripped_node);
-
-        // let fwd_anchored_sets = {
-        //     let n = b.prune_begin(node);
-        //     let n = b.strip_prefix_safe(n);
-        //     calc_prefix_sets(b, n)?
-        // };
         let fwd_potential_sets = calc_potential_start(b, fwd_body, 16, 64, false)?;
         let fwd_potential_stripped_sets =
             calc_potential_start(b, fwd_body_stripped, 16, 64, false)?;
         let rev_anchored_sets = calc_prefix_sets(b, rev_start)?;
-        let mut rev_potential_sets = calc_potential_start_prune(b, rev_start, 16, 64, true)?;
+        // let mut rev_potential_sets = calc_potential_start_prune(b, rev_start, 16, 64, true)?;
+        let rev_combined_init = {
+            let n = b.prune_begin(rev_start);
+            b.strip_prefix_safe(n)
+        };
+        let mut rev_potential_sets = calc_combined_prefix(b, rev_combined_init, 3, 16, 64)?;
         if rev_potential_sets.is_empty() {
             if let Ok(body) = b.strip_lb(node) {
                 if body != node {
@@ -299,15 +359,11 @@ fn scan_cost(b: &mut RegexBuilder, sets: &[TSetId], dir: Direction, body_shape: 
     (cost * 1e9) as u64
 }
 
-/// Shape of the body *after* the prefix, controlling fwd-direction verify cost.
+/// Shape of the node after prefix, controlling fwd-direction verify cost.
 #[derive(Copy, Clone, Debug)]
 pub enum NodeShape {
-    /// Body is `_*` after the prefix — fwd verify is O(1) (saturate to EOI).
     TrailingStar,
-    /// Body is bounded length — fwd verify is a small constant.
     Bounded,
-    /// Body contains an unbounded wildcard (`_+`, `[^x]+`, ...) before more
-    /// constraints — fwd verify per hit is O(remaining input).
     Unbounded,
 }
 
@@ -332,8 +388,8 @@ fn classify_body_shape(
 }
 const TEDDY_MAX_FREQ_SUM: u64 = 25_000;
 // sum of BYTE_FREQ[0..256] in the corpus
-const TOTAL_BYTE_FREQ: u64 = 252_052;
-// contributes no meaningful filtering (essentially a wildcard).
+pub(crate) const TOTAL_BYTE_FREQ: u64 = 252_052;
+/// contributes no meaningful filtering
 const TEDDY_WEAK_POSITION_FREQ: u64 = 100_000;
 // when to use memchr instead of a full prefix
 const TEDDY_MEMCHR_MAX_FREQ: u64 = 2_500;
@@ -368,9 +424,9 @@ pub fn build_strict_literal_prefix(
 pub fn build_fwd_prefix(
     b: &mut RegexBuilder,
     node: NodeId,
-) -> Result<(Option<crate::accel::FwdPrefixSearch>, bool), crate::Error> {
+) -> Result<Option<crate::accel::FwdPrefixSearch>, crate::Error> {
     if !crate::simd::has_simd() {
-        return Ok((None, false));
+        return Ok(None);
     }
     build_fwd_prefix_simd(b, node)
 }
@@ -390,33 +446,9 @@ fn try_build_fwd_search_raw(
     byte_sets_raw: &[Vec<u8>],
 ) -> Result<Option<crate::accel::FwdPrefixSearch>, crate::Error> {
     let lit_len = byte_sets_raw.iter().take_while(|bs| bs.len() == 1).count();
-    if cfg!(feature = "debug") {
-        // eprintln!(
-        //     "  [fwd-prefix] lit_len={} total={} sets={:?}",
-        //     lit_len,
-        //     byte_sets_raw.len(),
-        //     byte_sets_raw
-        //         .iter()
-        //         .map(|bs| if bs.len() <= 4 {
-        //             format!("{:?}", bs)
-        //         } else {
-        //             format!("[{}b]", bs.len())
-        //         })
-        //         .collect::<Vec<_>>()
-        // );
-    }
     if lit_len >= 3 {
         let needle: Vec<u8> = byte_sets_raw[..lit_len].iter().map(|bs| bs[0]).collect();
         let lit = crate::simd::FwdLiteralSearch::new(&needle);
-        if cfg!(feature = "debug") {
-            // let freq = crate::simd::BYTE_FREQ[lit.rare_byte() as usize];
-            // eprintln!(
-            //     "  [fwd-prefix] literal {:?} rare={} freq={}",
-            //     std::str::from_utf8(&needle).unwrap_or("?"),
-            //     lit.rare_byte() as char,
-            //     freq
-            // );
-        }
         if lit_len == byte_sets_raw.len()
             || crate::simd::BYTE_FREQ[lit.rare_byte() as usize] < RARE_BYTE_FREQ_LIMIT
         {
@@ -529,24 +561,19 @@ fn rarest_freq(b: &mut RegexBuilder, sets: &[TSetId]) -> u64 {
 fn build_fwd_prefix_from_sets(
     b: &mut RegexBuilder,
     full_sets: &[TSetId],
-    _stripped_sets: &[TSetId],
-) -> Result<(Option<crate::accel::FwdPrefixSearch>, bool), crate::Error> {
+) -> Result<Option<crate::accel::FwdPrefixSearch>, crate::Error> {
     if !full_sets.is_empty() {
-        if let Some(fp) = try_build_fwd_search(b, full_sets)? {
-            return Ok((Some(fp), false));
-        }
+        return try_build_fwd_search(b, full_sets);
     }
-    Ok((None, false))
+    Ok(None)
 }
 
 fn build_fwd_prefix_simd(
     b: &mut RegexBuilder,
     node: NodeId,
-) -> Result<(Option<crate::accel::FwdPrefixSearch>, bool), crate::Error> {
-    let stripped_node = b.strip_prefix_safe(node);
+) -> Result<Option<crate::accel::FwdPrefixSearch>, crate::Error> {
     let full_sets = calc_potential_start(b, node, 16, 64, false)?;
-    let stripped_sets = calc_potential_start(b, stripped_node, 16, 64, false)?;
-    build_fwd_prefix_from_sets(b, &full_sets, &stripped_sets)
+    build_fwd_prefix_from_sets(b, &full_sets)
 }
 
 const MAX_RANGE_SETS: usize = 3;
@@ -623,13 +650,13 @@ fn try_build_fwd_range_prefix(
     ))
 }
 
-/// Build a `RevPrefixSearch` from byte sets, or return `None` if the sets are
+/// Build a `RevTeddySearch` from byte sets, or return `None` if the sets are
 /// too wide to be useful.  `len >= 2` required (single-byte case is handled by
 /// the DFA skip system).
 pub(crate) fn build_rev_prefix_search(
     b: &mut RegexBuilder,
     sets: &[TSetId],
-) -> Option<crate::accel::RevPrefixSearch> {
+) -> Option<crate::accel::RevTeddySearch> {
     if sets.len() < 1 {
         return None;
     }
@@ -674,17 +701,8 @@ pub(crate) fn build_rev_prefix_search(
         }
     }
     let freq_sums: Vec<u64> = pos_freq[tail_offset..tail_offset + num_simd].to_vec();
-    if cfg!(feature = "debug") {
-        // eprintln!(
-        //     "  [rev-prefix] tail_offset={} window_freqs={:?}",
-        //     tail_offset, freq_sums
-        // );
-    }
     let rarest_freq_sum = *freq_sums.iter().min().unwrap_or(&u64::MAX);
     if rarest_freq_sum > TEDDY_MAX_FREQ_SUM {
-        // if cfg!(feature = "debug") {
-        //     eprintln!("  [rev-prefix] reject: max sum={}", rarest_freq_sum,);
-        // }
         return None;
     }
     let narrow = freq_sums
@@ -692,22 +710,11 @@ pub(crate) fn build_rev_prefix_search(
         .filter(|&&f| f <= TEDDY_WEAK_POSITION_FREQ)
         .count();
     if narrow < 2 && rarest_freq_sum > TEDDY_MEMCHR_MAX_FREQ {
-        if cfg!(feature = "debug") {
-            // eprintln!(
-            //     "  [rev-prefix] reject: memchr-degenerate, rarest_freq={} > {} (narrow={})",
-            //     rarest_freq_sum, TEDDY_MEMCHR_MAX_FREQ, narrow
-            // );
-        }
         return None;
     }
-    // Combined hit rate ≈ ∏(freq_i) / TOTAL_BYTE_FREQ^num_simd.  Threshold
-    // 12/256 ≈ 4.7%.
     let combined_freq: u128 = freq_sums.iter().map(|&f| f as u128).product();
     let threshold: u128 = 12 * (TOTAL_BYTE_FREQ as u128).pow(num_simd as u32) / 256;
     if combined_freq > threshold {
-        // if cfg!(feature = "debug") {
-        //     eprintln!("  [rev-prefix] reject: combined_freq > threshold");
-        // }
         return None;
     }
     let window = &byte_sets_raw[tail_offset..tail_offset + num_simd];
@@ -715,7 +722,7 @@ pub(crate) fn build_rev_prefix_search(
         .iter()
         .map(|bytes| crate::accel::TSet::from_bytes(bytes))
         .collect();
-    Some(crate::accel::RevPrefixSearch::new(
+    Some(crate::accel::RevTeddySearch::new(
         num_simd,
         window,
         all_sets,
@@ -728,7 +735,6 @@ pub(crate) fn build_rev_prefix_search(
 pub enum PrefixKind {
     AnchoredRev,
     AnchoredFwd(crate::accel::FwdPrefixSearch),
-    UnanchoredFwd(crate::accel::FwdPrefixSearch),
     AnchoredFwdLb(crate::accel::FwdPrefixSearch),
     PotentialStart,
 }
@@ -738,9 +744,7 @@ impl PrefixKind {
     pub(crate) fn is_fwd(&self) -> bool {
         matches!(
             self,
-            PrefixKind::AnchoredFwd(_)
-                | PrefixKind::UnanchoredFwd(_)
-                | PrefixKind::AnchoredFwdLb(_)
+            PrefixKind::AnchoredFwd(_) | PrefixKind::AnchoredFwdLb(_)
         )
     }
 
@@ -751,9 +755,7 @@ impl PrefixKind {
 
     pub(crate) fn fwd_search(&self) -> Option<&crate::accel::FwdPrefixSearch> {
         match self {
-            PrefixKind::AnchoredFwd(s)
-            | PrefixKind::UnanchoredFwd(s)
-            | PrefixKind::AnchoredFwdLb(s) => Some(s),
+            PrefixKind::AnchoredFwd(s) | PrefixKind::AnchoredFwdLb(s) => Some(s),
             _ => None,
         }
     }
@@ -763,7 +765,7 @@ impl PrefixKind {
 pub(crate) fn try_rev_prefix(
     b: &mut RegexBuilder,
     rev_node: NodeId,
-) -> Result<Option<(PrefixKind, crate::accel::RevPrefixSearch)>, Error> {
+) -> Result<Option<(PrefixKind, crate::accel::RevTeddySearch)>, Error> {
     use resharp_algebra::nulls::NullsId;
     if b.get_nulls_id(rev_node) != NullsId::EMPTY {
         return Ok(None);
@@ -790,18 +792,15 @@ pub(crate) fn select_prefix(
     has_look: bool,
     min_len: u32,
     max_cap: usize,
-) -> Result<(Option<PrefixKind>, Option<crate::accel::RevPrefixSearch>), Error> {
+    no_fwd_prefix: bool,
+) -> Result<(Option<PrefixKind>, Option<crate::accel::RevTeddySearch>), Error> {
     if !crate::simd::has_simd() {
         return Ok((None, None));
     }
-    let (kind, skip) = select_prefix_simd(b, node, rev_start, has_look, min_len)?;
+    let (kind, skip) = select_prefix_simd(b, node, rev_start, has_look, min_len, no_fwd_prefix)?;
     let fwd_already = matches!(
         kind,
-        Some(
-            PrefixKind::AnchoredFwd(_)
-                | PrefixKind::UnanchoredFwd(_)
-                | PrefixKind::AnchoredFwdLb(_)
-        )
+        Some(PrefixKind::AnchoredFwd(_) | PrefixKind::AnchoredFwdLb(_))
     );
     #[cfg(feature = "convergence_prefix")]
     if !fwd_already {
@@ -826,17 +825,16 @@ fn try_convergence_prefix(
     fwd_node: NodeId,
     rev_ldfa: &mut crate::engine::LDFA,
     rev_start: NodeId,
-) -> Result<Option<(PrefixKind, crate::accel::RevPrefixSearch)>, Error> {
+) -> Result<Option<(PrefixKind, crate::accel::RevTeddySearch)>, Error> {
     const MAX_DEPTH: u32 = 12;
     let (fwd_min, _) = b.get_min_max_length(fwd_node);
     if fwd_min == 0 {
         return Ok(None);
     }
-    // Try strict convergence first; fall back to relaxed.
     let attempt = |conv_node,
                    peel: u32,
                    b: &mut RegexBuilder|
-     -> Result<Option<(PrefixKind, crate::accel::RevPrefixSearch)>, Error> {
+     -> Result<Option<(PrefixKind, crate::accel::RevTeddySearch)>, Error> {
         let Some((kind, search)) = try_rev_prefix(b, conv_node)? else {
             return Ok(None);
         };
@@ -903,10 +901,11 @@ fn select_prefix_simd(
     rev_start: NodeId,
     has_look: bool,
     min_len: u32,
-) -> Result<(Option<PrefixKind>, Option<crate::accel::RevPrefixSearch>), Error> {
+    no_fwd_prefix: bool,
+) -> Result<(Option<PrefixKind>, Option<crate::accel::RevTeddySearch>), Error> {
     use resharp_algebra::nulls::NullsId;
     if min_len == 0 {
-        if has_look && node.contains_lookbehind(b) {
+        if !no_fwd_prefix && has_look && node.contains_lookbehind(b) {
             if let Some(fp) = try_build_fwd_lb(b, node)? {
                 return Ok((Some(PrefixKind::AnchoredFwdLb(fp)), None));
             }
@@ -942,18 +941,15 @@ fn select_prefix_simd(
         && (!sets.rev_anchored.sets.is_empty() || !sets.rev_potential.sets.is_empty());
     let fwd_wins = fwd_cost < rev_cost;
 
-    let fwd_candidate = if has_look && node.contains_lookbehind(b) {
+    let fwd_candidate = if no_fwd_prefix {
+        None
+    } else if has_look && node.contains_lookbehind(b) {
         try_build_fwd_lb(b, node)?.map(PrefixKind::AnchoredFwdLb)
     } else if has_look && contains_lookahead_rel_max(b, node) {
         None
     } else {
-        let (fp, stripped) = build_fwd_prefix_from_sets(
-            b,
-            &sets.fwd_potential.sets,
-            &sets.fwd_potential_stripped.sets,
-        )?;
+        let fp = build_fwd_prefix_from_sets(b, &sets.fwd_potential.sets)?;
         match fp {
-            Some(fp) if stripped => Some(PrefixKind::UnanchoredFwd(fp)),
             Some(fp) => Some(PrefixKind::AnchoredFwd(fp)),
             None if b.is_infinite(node) => {
                 build_strict_literal_prefix(b, node)?.map(PrefixKind::AnchoredFwd)
@@ -961,8 +957,7 @@ fn select_prefix_simd(
             None => None,
         }
     };
-
-    let try_rev = |b: &mut RegexBuilder| -> Option<(PrefixKind, crate::accel::RevPrefixSearch)> {
+    let try_rev = |b: &mut RegexBuilder| -> Option<(PrefixKind, crate::accel::RevTeddySearch)> {
         if !rev_usable {
             return None;
         }
@@ -979,7 +974,7 @@ fn select_prefix_simd(
         None
     };
 
-    if fwd_wins {
+    if fwd_wins && !no_fwd_prefix {
         if let Some(kind) = fwd_candidate {
             return Ok((Some(kind), None));
         }
@@ -1016,7 +1011,7 @@ fn try_build_fwd_lb(
         }
         lb_stripped = after;
     }
-    if !matches!(b.get_fixed_length(lb_stripped), Some(1..=4)) {
+    if !matches!(b.get_fixed_length(lb_stripped), Some(1..=64)) {
         return Ok(None);
     }
     if body_absorbs_lb(b, body, lb_stripped)? {
@@ -1025,11 +1020,7 @@ fn try_build_fwd_lb(
         return Ok(None);
     }
     let lb_body = b.mk_concat(lb_stripped, body);
-    let (fp, stripped) = build_fwd_prefix(b, lb_body)?;
-    if stripped {
-        return Ok(None);
-    }
-    Ok(fp)
+    build_fwd_prefix(b, lb_body)
 }
 
 fn body_absorbs_lb(b: &mut RegexBuilder, body: NodeId, lb: NodeId) -> Result<bool, crate::Error> {

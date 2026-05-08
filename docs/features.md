@@ -2,7 +2,9 @@
 
 ## Hardened mode
 
-Guarantees **linear matching for all patterns** - O(N·S) where N is input length and S is DFA states. The default engine can go quadratic when a pattern produces dense reverse-scan candidates.
+Guarantees **linear matching for all patterns and all match-collecting APIs** (`find_all`, etc.) in O(N·S), where N is input length and S is DFA states. The default engine is linear on the vast majority of patterns but can go quadratic on `find_all` when a pattern produces dense reverse-scan candidates. Hardened mode rules that out unconditionally.
+
+`is_match` is **always linear** in the default engine too. It short-circuits on the first match and never runs the reverse pass, so hardened mode is only relevant when you are collecting matches.
 
 ```rust
 let re = resharp::Regex::with_options(
@@ -11,8 +13,9 @@ let re = resharp::Regex::with_options(
 ).unwrap();
 ```
 
-- ~3-20x slower on average - still fast, just not as fast as RE# in the default mode
-- lookarounds not supported - returns `UnsupportedPattern`
+Note: RE# auto-hardens many common patterns at compile time, so the default engine is already linear on the bulk of pathological real-world regexes. Reach for `hardened(true)` only when worst-case linearity is a hard requirement (e.g. running untrusted patterns).
+
+- With hardened mode, in the worst cases you can expect performance roughly around 100MBs on consumer hardware. Having it disabled can sometimes be more than 10x faster
 
 > hardened mode on `.*[^A-Z]|[A-Z]` with input of `"A" * N` (N=10,000):
 
