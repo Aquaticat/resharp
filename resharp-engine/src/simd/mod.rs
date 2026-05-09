@@ -302,7 +302,6 @@ impl FwdLiteralSearch {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
 pub(crate) struct RevLiteralInner {
     needle: Vec<u8>,
     chunks: Vec<u64>,
@@ -456,7 +455,7 @@ impl RevLiteralInner {
         let mut pos = end - (nlen - 1) + rare_idx;
         while pos >= min_rare_pos + 16 {
             let chunk = vld1q_u8(ptr.add(pos - 15));
-            let mut mask = super::neon::neon_movemask(vceqq_u8(chunk, vrare));
+            let mut mask = neon::neon_movemask(vceqq_u8(chunk, vrare));
             while mask != 0 {
                 let bit = 15 - (mask.leading_zeros() as usize);
                 let start = pos - 15 + bit - rare_idx;

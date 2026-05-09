@@ -455,11 +455,13 @@ impl FwdRangeSearch {
             u8x16_splat(self.ranges[0].0),
             u8x16_splat(self.ranges[if n >= 2 { 1 } else { 0 }].0),
             u8x16_splat(self.ranges[if n >= 3 { 2 } else { 0 }].0),
+            u8x16_splat(self.ranges[if n >= 4 { 3 } else { 0 }].0),
         ];
         let hi = [
             u8x16_splat(self.ranges[0].1),
             u8x16_splat(self.ranges[if n >= 2 { 1 } else { 0 }].1),
             u8x16_splat(self.ranges[if n >= 3 { 2 } else { 0 }].1),
+            u8x16_splat(self.ranges[if n >= 4 { 3 } else { 0 }].1),
         ];
 
         let simd_end = haystack.len().saturating_sub(15 + self.len - 1);
