@@ -26,7 +26,7 @@ let found = re.is_match(b"the cat and the dog").unwrap();
 
 ## Syntax extensions
 
-RE# supports standard regex syntax plus three extensions: `_` (any byte incl. newline), `&` (intersection), and `~(...)` (complement). `_` matches any byte, so `_*` means "any string".
+RE# supports standard regex syntax plus three extensions: `&` (intersection), and `~(...)` (complement). `_` matches any byte, so `_*` means "any string".
 
 ```perl
 _*                any string
