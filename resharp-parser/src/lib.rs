@@ -46,11 +46,13 @@ pub struct PatternFlags {
     /// max children allowed in any single `Concat`/`Alternation`/
     /// `Intersection` node. default 4_000.
     pub max_list_len: usize,
+    /// max upper bound on bounded repetition `{n,m}`. default 500.
+    pub max_repeat: u32,
 }
 
 // arbitrary safeguards, these will not prevent intentional DoS patterns
 // more to protect you from shooting yourself in the foot
-const REPETITION_COUNT_LIMIT: u32 = 2_000;
+pub const DEFAULT_MAX_REPEAT: u32 = 500;
 pub const DEFAULT_EXPANDED_AST_LIMIT: u64 = 50_000;
 pub const DEFAULT_MAX_LIST_LEN: usize = 4_000;
 
@@ -66,6 +68,7 @@ impl Default for PatternFlags {
             ascii_perl_classes: false,
             expanded_ast_limit: DEFAULT_EXPANDED_AST_LIMIT,
             max_list_len: DEFAULT_MAX_LIST_LEN,
+            max_repeat: DEFAULT_MAX_REPEAT,
         }
     }
 }
@@ -217,6 +220,7 @@ pub struct ResharpParser<'s> {
     global_case_insensitive: bool,
     expanded_ast_limit: u64,
     max_list_len: usize,
+    max_repeat: u32,
     comments: RefCell<Vec<ast::Comment>>,
     stack_group: RefCell<Vec<GroupState>>,
     stack_class: RefCell<Vec<ClassState>>,
@@ -342,6 +346,7 @@ impl<'s> ResharpParser<'s> {
             global_case_insensitive: flags.case_insensitive,
             expanded_ast_limit: flags.expanded_ast_limit,
             max_list_len: flags.max_list_len,
+            max_repeat: flags.max_repeat,
             comments: RefCell::new(vec![]),
             stack_group: RefCell::new(vec![]),
             stack_class: RefCell::new(vec![]),
@@ -1835,10 +1840,10 @@ impl<'s> ResharpParser<'s> {
         }
 
         let over_limit = match &range {
-            ast::RepetitionRange::Exactly(n) => *n > REPETITION_COUNT_LIMIT,
-            ast::RepetitionRange::AtLeast(n) => *n > REPETITION_COUNT_LIMIT,
+            ast::RepetitionRange::Exactly(n) => *n > self.max_repeat,
+            ast::RepetitionRange::AtLeast(n) => *n > self.max_repeat,
             ast::RepetitionRange::Bounded(n, m) => {
-                *n > REPETITION_COUNT_LIMIT || *m > REPETITION_COUNT_LIMIT
+                *n > self.max_repeat || *m > self.max_repeat
             }
         };
         if over_limit {

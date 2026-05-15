@@ -273,7 +273,7 @@ input = "2.3.3.3a!"
 matches = []
 
 [[test]]
-name = "repro_unanchored_fwd_ascii_word"
+name = "unanchored_fwd_ascii_word"
 pattern = '\w\w-\w\w'
 input = "xxxxx00-00yyyyy"
 matches = [[5, 10]]

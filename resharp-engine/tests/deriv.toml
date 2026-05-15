@@ -31,7 +31,7 @@ fwd_nulls = [2]
 rev_nulls = [2]
 
 [[test]]
-name = "smaller_repro"
+name = "neg_lookarounds_dot_star"
 pattern = 'a(?!b).*(?<!a)b'
 input = "a b"
 

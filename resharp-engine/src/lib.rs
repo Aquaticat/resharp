@@ -280,11 +280,11 @@ pub struct Regex {
     pub(crate) fixed_length: Option<u32>,
     pub(crate) empty_nullable: bool,
     pub(crate) always_nullable: bool,
-    /// node === ⊥
+    /// node = ⊥
     /// found to be trivially unmatchable, not guaranteed before full expansion
     pub(crate) is_empty_lang: bool,
     pub(crate) fwd_begin_anchored: bool,
-    /// rev === _*, skip rev pass entirely
+    /// rev = _*, skip rev pass entirely
     pub(crate) rev_trivial: bool,
     pub(crate) initial_nullability: Nullability,
     pub(crate) fwd_end_nullable: bool,
@@ -602,10 +602,58 @@ fn opener_class(b: &mut RegexBuilder, start: NodeId) -> TSetId {
     acc
 }
 
-/// rejects obviously unsupported before compiling
-fn ensure_supported(
+fn collect_union_branches(b: &RegexBuilder, node: NodeId, out: &mut Vec<NodeId>) {
+    if b.get_kind(node) == Kind::Union {
+        collect_union_branches(b, node.left(b), out);
+        collect_union_branches(b, node.right(b), out);
+    } else {
+        out.push(node);
+    }
+}
+
+/// top-level union with lookbehind is ok if each 
+/// lb branch's first-byte set is disjoint from every other branch's
+fn union_branches_distinguishable(b: &mut RegexBuilder, union_node: NodeId) -> bool {
+    let mut branches = Vec::new();
+    collect_union_branches(b, union_node, &mut branches);
+    let any_lb = branches.iter().any(|n| n.contains_lookbehind(b));
+    if !any_lb {
+        return true;
+    }
+    let mut firsts: Vec<(bool, TSetId)> = Vec::with_capacity(branches.len());
+    for &br in &branches {
+        let sets = match prefix::calc_potential_start_prune(b, br, 1, 64, false) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let first = match sets.first() {
+            Some(&s) => s,
+            None => return false,
+        };
+        firsts.push((br.contains_lookbehind(b), first));
+    }
+    for i in 0..firsts.len() {
+        if !firsts[i].0 {
+            continue;
+        }
+        for j in 0..firsts.len() {
+            if i == j {
+                continue;
+            }
+            let inter = b.solver().and_id(firsts[i].1, firsts[j].1);
+            if inter != TSetId::EMPTY {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// rejects unsupported before compiling. at_root relaxes union+lookbehind via disjoint first-byte sets
+fn ensure_supported_rec(
     b: &mut RegexBuilder,
     node: NodeId,
+    at_root: bool,
 ) -> Result<(), resharp_algebra::ResharpError> {
     if !node.contains_lookaround(b) {
         return Ok(());
@@ -613,31 +661,43 @@ fn ensure_supported(
     match b.get_kind(node) {
         Kind::Union => {
             let (l, r) = (node.left(b), node.right(b));
-            if l.contains_lookbehind(b) || r.contains_lookbehind(b) {
-                return Err(resharp_algebra::ResharpError::UnsupportedPattern);
+            let has_lb = l.contains_lookbehind(b) || r.contains_lookbehind(b);
+            if !has_lb {
+                return Ok(());
             }
-            Ok(())
+            if at_root && union_branches_distinguishable(b, node) {
+                Ok(())
+            } else {
+                Err(resharp_algebra::ResharpError::UnsupportedPattern)
+            }
         }
         Kind::Concat | Kind::Inter => {
-            ensure_supported(b, node.left(b))?;
-            ensure_supported(b, node.right(b))
+            ensure_supported_rec(b, node.left(b), false)?;
+            ensure_supported_rec(b, node.right(b), false)
         }
         Kind::Star => {
             if node.left(b).contains_lookaround(b) {
                 return Err(resharp_algebra::ResharpError::UnsupportedPattern);
             }
-            ensure_supported(b, node.left(b))
+            ensure_supported_rec(b, node.left(b), false)
         }
-        Kind::Counted => ensure_supported(b, node.left(b)),
-        Kind::Compl => ensure_supported(b, node.left(b)),
+        Kind::Counted => ensure_supported_rec(b, node.left(b), false),
+        Kind::Compl => ensure_supported_rec(b, node.left(b), false),
         Kind::Lookbehind | Kind::Lookahead => {
-            ensure_supported(b, node.left(b))?;
-            ensure_supported(b, node.right(b))
+            ensure_supported_rec(b, node.left(b), false)?;
+            ensure_supported_rec(b, node.right(b), false)
         }
         Kind::Pred => Ok(()),
         Kind::Begin => Ok(()),
         Kind::End => Ok(()),
     }
+}
+
+fn ensure_supported(
+    b: &mut RegexBuilder,
+    node: NodeId,
+) -> Result<(), resharp_algebra::ResharpError> {
+    ensure_supported_rec(b, node, true)
 }
 
 impl Regex {
@@ -681,6 +741,11 @@ impl Regex {
                 usize::MAX
             } else {
                 resharp_parser::DEFAULT_MAX_LIST_LEN
+            },
+            max_repeat: if opts.unbounded_size {
+                u32::MAX
+            } else {
+                resharp_parser::DEFAULT_MAX_REPEAT
             },
         };
         let node = resharp_parser::parse_ast_with(&mut b, pattern, &pflags)?;
@@ -1163,6 +1228,9 @@ pub(crate) fn find_strict_convergence_node(
         if depth == max_depth {
             break;
         }
+        if frontier.len() > 16 {
+            return None;
+        }
         let mut next: HashSet<u16> = HashSet::new();
         for &s in &frontier {
             for mt in 0..num_mt {
@@ -1172,7 +1240,7 @@ pub(crate) fn find_strict_convergence_node(
                 }
             }
         }
-        if next.is_empty() {
+        if next.is_empty() || next.len() > 256 {
             return None;
         }
         frontier = next;

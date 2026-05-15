@@ -256,7 +256,6 @@ impl PrefixSets {
         let fwd_potential_stripped_sets =
             calc_potential_start(b, fwd_body_stripped, 16, 64, false)?;
         let rev_anchored_sets = calc_prefix_sets(b, rev_start)?;
-        // let mut rev_potential_sets = calc_potential_start_prune(b, rev_start, 16, 64, true)?;
         let rev_combined_init = {
             let n = b.prune_begin(rev_start);
             b.strip_prefix_safe(n)

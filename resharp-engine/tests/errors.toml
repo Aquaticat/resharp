@@ -122,9 +122,3 @@ name = "alt_embedded_line_anchor_dotstar"
 pattern = '.*(a|^b)'
 expect_error = true
 reason = "alternation embeds ^ inside .* tail"
-
-[[test]]
-name = "alt_embedded_word_boundary"
-pattern = '(a|\bb)'
-expect_error = true
-reason = "alternation with embedded word boundary"

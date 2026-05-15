@@ -3076,7 +3076,7 @@ impl RegexBuilder {
             return Ok(NodeId::BOT);
         }
         if lb_body == NodeId::TS {
-            return Ok(lb_prev);
+            return Ok(if lb_prev == NodeId::MISSING { NodeId::EPS } else { lb_prev });
         }
         if lb_body == NodeId::EPS {
             match lb_prev {

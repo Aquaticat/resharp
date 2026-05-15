@@ -602,3 +602,21 @@ name = "fas_dotstar_lb_x_foo_dotstar"
 pattern = '[\s\S]+(?<=x)foo[\s\S]+'
 input = "axfoo def"
 matches = [[0, 9]]
+
+[[test]]
+name = "empty_lookbehind"
+pattern = '(?<=)'
+input = "test"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4]]
+
+[[test]]
+name = "star_lookbehind_charclass"
+pattern = '(?<=\s*)[,\]]'
+input = "a, b]"
+matches = [[1, 2], [4, 5]]
+
+[[test]]
+name = "begin_star_lookbehind_group"
+pattern = '^(?<=\s*)(import\s*\{.*)'
+input = "import { foo }"
+matches = [[0, 14]]

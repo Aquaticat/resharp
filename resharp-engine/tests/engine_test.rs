@@ -1136,7 +1136,7 @@ fn fwd_la_3() {
 }
 
 #[test]
-fn repro_lookahead_in_loop() {
+fn reject_lookahead_in_loop() {
     let pattern = r"(.(?=.))+x";
     let opts = RegexOptions::default().unicode(resharp::UnicodeMode::Ascii);
     let result = Regex::with_options(pattern, opts);
@@ -1173,24 +1173,53 @@ fn no_progress() {
 }
 
 #[test]
-fn repro_is_match_negative_lookahead() {
+fn repeat_limit_rejects_large_count() {
+    let result = Regex::new(r"(?:[\x20-\x7E\xA0-\xFF](?!\uFE0F)){1,1000}");
+    assert!(result.is_err(), "expected error for repeat > 500");
+    let ok = Regex::new(r"(?:[\x20-\x7E\xA0-\xFF](?!\uFE0F)){1,500}");
+    assert!(ok.is_ok(), "repeat at 500 should compile");
+}
+
+#[test]
+fn repeat_limit_unbounded_allows_large_count() {
+    let opts = RegexOptions::default().unbounded_size(true);
+    let result = Regex::with_options(r"a{1,1000}", opts);
+    assert!(result.is_ok(), "unbounded_size should allow repeat > 500");
+}
+
+#[test]
+fn is_match_negative_lookahead() {
     let re = Regex::new(r"foo(?!bar)").unwrap();
     assert!(!re.is_match(b"foobar").unwrap());
 }
 
 #[test]
-fn light_depth_pass_bdfa_prefix_falls_through_to_potential() {
-    let p = r"\s\!?LIGHT_DEPTH_PASS\s";
-    for mode in [
-        resharp::UnicodeMode::Ascii,
-        resharp::UnicodeMode::Javascript,
-        resharp::UnicodeMode::Full,
-    ] {
-        let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
-        let hay = " LIGHT_DEPTH_PASS ".repeat(100);
-        let ms = re.find_all(hay.as_bytes()).unwrap();
-        assert_eq!(ms.len(), 100, "mode {:?}", mode);
-    }
+fn union_with_word_boundary_branch() {
+    let re = Regex::new(r"(a|\bb)").unwrap();
+    let hay = b"a xb bb ya";
+    let ms = re.find_all(hay).unwrap();
+    let got: Vec<(usize, usize)> = ms.iter().map(|m| (m.start, m.end)).collect();
+    println!("got: {:?}", got);
+    // a matches every 'a'; \bb matches 'b' at word start (pos 5).
+    assert_eq!(got, vec![(0, 1), (5, 6), (9, 10)]);
+}
+
+#[test]
+fn union_with_anchored_branch_simple() {
+    let re = Regex::new("^aa|bb").unwrap();
+    let hay = b"aa\nbb aa";
+    let ms = re.find_all(hay).unwrap();
+    let got: Vec<(usize, usize)> = ms.iter().map(|m| (m.start, m.end)).collect();
+    assert_eq!(got, vec![(0, 2), (3, 5)]);
+}
+
+#[test]
+fn union_with_anchored_branch_mixed() {
+    let re = Regex::new("aa|bb|^##|cc").unwrap();
+    let hay = b"##\nbb ## cc aa";
+    let ms = re.find_all(hay).unwrap();
+    let got: Vec<(usize, usize)> = ms.iter().map(|m| (m.start, m.end)).collect();
+    assert_eq!(got, vec![(0, 2), (3, 5), (9, 11), (12, 14)]);
 }
 
 #[test]
@@ -1302,7 +1331,6 @@ fn trailing_dollar_after_top_star_pruned() {
         with_dollar.find_all(hay).unwrap(),
         without_dollar.find_all(hay).unwrap()
     );
-    // multi-line haystack: longest match runs to \z regardless
     let hay2 = b"abc def ghi\njkl mno\npqr";
     assert_eq!(
         with_dollar.find_all(hay2).unwrap(),

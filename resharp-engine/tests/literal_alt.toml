@@ -135,7 +135,7 @@ input = "abcdefghijklmnopqrsx"
 matches = [[0, 20]]
 
 [[test]]
-name = "repro_unanchored_fwd_date"
+name = "unanchored_fwd_date"
 pattern = '\d{4}-\d\d?-\d\d?((T| )\d{2}:\d{2}:\d{2})?'
 input = "0000-0-0 0000-0-0"
 matches = [[0, 8], [9, 17]]
