@@ -1475,7 +1475,7 @@ impl<'s> ResharpParser<'s> {
                         match s.as_str() {
                             // \p{ascii} for ascii, \p{ascii}&\p{Letter} => [A-Za-z]
                             "ascii" => return Ok(tb.mk_range_u8(0, 127)),
-                            // restricts matches to valid utf8, \p{utf8}*&~(a) => non a, but valid utf8
+                            // a single valid utf8 codepoint; \p{utf8}*&~(a) => non a, but valid utf8
                             "utf8" => {
                                 let ascii = tb.mk_range_u8(0, 127);
                                 let beta = tb.mk_range_u8(128, 0xBF);
@@ -1485,8 +1485,7 @@ impl<'s> ResharpParser<'s> {
                                 let e0s = tb.mk_concats([e0, beta, beta].into_iter());
                                 let f0 = tb.mk_range_u8(0xF0, 0xF7);
                                 let f0s = tb.mk_concats([f0, beta, beta, beta].into_iter());
-                                let merged = tb.mk_unions([ascii, c0s, e0s, f0s].into_iter());
-                                return Ok(tb.mk_star(merged));
+                                return Ok(tb.mk_unions([ascii, c0s, e0s, f0s].into_iter()));
                             }
                             "hex" => {
                                 let nums = tb.mk_range_u8(b'0', b'9');

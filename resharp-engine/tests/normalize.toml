@@ -118,14 +118,17 @@ name = 'la_peel_neg'
 pattern = '$STRING:string'
 pp = '⊥'
 
-
-# `(?!b)(.*)` simplifies to a Lookahead with body=`~(b_*)\z` and tail=`.*`,
-# rel=u32::MAX. The body asserts "next does not start with b" and is
-# zero-width; the `.*` is carried as the lookahead's tail. Bug: at runtime
-# this Lookahead is treated as nullable in CENTER irrespective of whether
-# the assertion holds, so `(and|AND)\b(.*)` over `xxxxxANDyyyyy` yields a
-# spurious match (\b fails between D and y but a match is reported).
 [[test]]
 name = 'neg_la_then_dotstar'
 pattern = 'a(?!b)(.*)'
 pp = 'a(?=~(b_*)\z){∅}❮.*❯'
+
+[[test]]
+name = 'utf8_codepoint'
+pattern = '\p{utf8}'
+pp = '([\x00-\x7F]|[\xC0-\xDF][\x80-\xBF]|[\xE0-\xEF][\x80-\xBF][\x80-\xBF]|[\xF0-\xF7][\x80-\xBF]{3})'
+
+[[test]]
+name = 'utf8_constrained_complement'
+pattern = '~(_*abc_*)&\p{utf8}*'
+pp = '(~(_*abc_*)&([\x00-\x7F]|[\xC0-\xDF][\x80-\xBF]|[\xE0-\xEF][\x80-\xBF][\x80-\xBF]|[\xF0-\xF7][\x80-\xBF]{3})*)'
