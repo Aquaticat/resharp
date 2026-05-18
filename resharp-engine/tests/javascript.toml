@@ -146,3 +146,51 @@ name = "breaking_change_two_occurrences"
 pattern = 'BREAKING CHANGE:([\s\S]*)'
 input = "BREAKING CHANGE: a\nBREAKING CHANGE: b"
 matches = [[0, 37]]
+
+[[test]]
+name = "wb_nullable_word_star_no_split"
+pattern = 'cat\b\w*'
+input = "category"
+matches = []
+
+[[test]]
+name = "wb_word_no_split"
+pattern = 'cat\b\w'
+input = "category"
+matches = []
+
+[[test]]
+name = "wb_charclass_no_split"
+pattern = 'cat\b[a-z]'
+input = "category"
+matches = []
+
+[[test]]
+name = "wb_nullable_charclass_star_no_split"
+pattern = 'cat\b[a-z]*'
+input = "category"
+matches = []
+
+[[test]]
+name = "wb_literal_no_split"
+pattern = 'cat\be'
+input = "category"
+matches = []
+
+[[test]]
+name = "wb_bare_no_split"
+pattern = 'cat\b'
+input = "category"
+matches = []
+
+[[test]]
+name = "wb_bare_at_space"
+pattern = 'cat\b'
+input = "cat dog"
+matches = [[0, 3]]
+
+[[test]]
+name = "wb_html_tag_negclass_star"
+pattern = '<script\b[^<]*'
+input = "<scripts!</script>)<"
+matches = []

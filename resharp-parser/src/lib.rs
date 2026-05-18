@@ -1382,7 +1382,7 @@ impl<'s> ResharpParser<'s> {
             let dig = tb.mk_range_u8(b'0', b'9');
             let us = tb.mk_u8(b'_');
             let w = tb.mk_unions([az, big, dig, us].into_iter());
-            (w, tb.mk_compl(w))
+            (w, resharp_algebra::neg_class(tb, w))
         };
         let left = self.resolve_word_kind(asts, idx, -1, translator, tb, word_id, not_word_id)?;
         let right = self.resolve_word_kind(asts, idx, 1, translator, tb, word_id, not_word_id)?;
