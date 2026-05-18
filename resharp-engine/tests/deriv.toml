@@ -39,3 +39,9 @@ input = "a b"
 name = "lb_inference_pp"
 pattern = '<.*(?<=<)bg'
 input = "<bg"
+
+[[test]]
+name = "lazy_intersection_complement_rev_nulls"
+pattern = "x(_*b&~(b_+))"
+input = "xab"
+rev_nulls = [3]

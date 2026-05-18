@@ -1,35 +1,28 @@
+mod common;
+use common::schemas::EngineFile;
 use resharp::Regex;
 use std::path::Path;
 
 #[test]
 fn stream_toml() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("stream.toml");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("stream.toml");
     let content = std::fs::read_to_string(&path).unwrap();
-    let table: toml::Value = content.parse().unwrap();
-    let tests = table["test"].as_array().unwrap();
-    for t in tests {
-        let name = t.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let pattern = t["pattern"].as_str().unwrap();
-        let input = t.get("input").and_then(|v| v.as_str()).unwrap_or("").as_bytes();
-        let want: Vec<(usize, usize)> = t["matches"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|m| {
-                let a = m.as_array().unwrap();
-                (a[0].as_integer().unwrap() as usize, a[1].as_integer().unwrap() as usize)
-            })
-            .collect();
-        let vs_find_all = t.get("vs_find_all").and_then(|v| v.as_bool()).unwrap_or(false);
-
-        let re = Regex::new(pattern).unwrap_or_else(|e| panic!("{name}: compile: {e}"));
+    let file: EngineFile = toml::from_str(&content).unwrap();
+    for tc in file.test {
+        let input = tc.input.as_bytes();
+        let re = Regex::new(&tc.pattern).unwrap_or_else(|e| panic!("{}: compile: {e}", tc.name));
         let s = re.stream(input).unwrap();
-        let got: Vec<(usize, usize)> = s.iter().map(|m| (m.start, m.end)).collect();
-        assert_eq!(got, want, "name={name} pattern={pattern:?} input={input:?}");
-
-        if vs_find_all {
+        let got: Vec<[usize; 2]> = s.iter().map(|m| [m.start, m.end]).collect();
+        assert_eq!(
+            got, tc.matches,
+            "name={} pattern={:?} input={:?}",
+            tc.name, tc.pattern, tc.input
+        );
+        if tc.vs_find_all {
             let f = re.find_all(input).unwrap();
-            assert_eq!(s, f, "name={name} stream != find_all");
+            assert_eq!(s, f, "name={} stream != find_all", tc.name);
         }
     }
 }

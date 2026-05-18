@@ -31,8 +31,7 @@ matches = [[0, 1], [1, 1]]
 name = "lookahead_zero_width"
 pattern = "(?=a)"
 input = "a"
-expect_error = true
-reason = "unsupported: pure lookahead"
+matches = [[0, 0]]
 
 [[test]]
 name = "lookahead_a_then_a"
@@ -352,8 +351,7 @@ matches = [[6, 10]]
 name = "neg_lookahead"
 pattern = "(?!a)"
 input = "b"
-expect_error = true
-reason = "unsupported: pure negative lookbehind"
+matches = [[0, 0], [1, 1]]
 
 [[test]]
 name = "neg_lookbehind_digit_a"
@@ -620,3 +618,92 @@ name = "begin_star_lookbehind_group"
 pattern = '^(?<=\s*)(import\s*\{.*)'
 input = "import { foo }"
 matches = [[0, 14]]
+
+[[test]]
+name = "case_split_boundaries"
+pattern = '(?<=[^A-Z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|(?<=[_-])(?=[^_-])'
+input = "fooBar_baz"
+matches = [[3, 3], [7, 7]]
+
+[[test]]
+name = "fixed_lookarounds"
+pattern = '(?<=[^A-Z])a(?=[A-Z])|(?<=[A-Z])b(?=[A-Z][a-z])'
+input = "xaAGbAa"
+matches = [[1, 2], [4, 5]]
+
+[[test]]
+name = "union_diff_lb_lengths_overlap_first_byte"
+pattern = '(?<=a)bc|(?<=xy)bcd'
+expect_error = true
+
+[[test]]
+name = "bare_lookahead_zero_width_dot_hash"
+pattern = '(?=[.#])'
+input = "a.b#c"
+matches = [[1, 1], [3, 3]]
+
+[[test]]
+name = "bare_lookahead_zero_width_no_match"
+pattern = '(?=[.#])'
+input = "plain"
+matches = []
+
+[[test]]
+name = "bare_lookahead_zero_width_at_zero"
+pattern = '(?=[.#])'
+input = "."
+matches = [[0, 0]]
+
+[[test]]
+name = "anchored_bare_lookahead_hello"
+pattern = '^(?=.*[A-Z])'
+input = "Hello"
+matches = [[0, 0]]
+
+[[test]]
+name = "anchored_bare_lookahead_lower"
+pattern = '^(?=.*[A-Z])'
+input = "hello"
+matches = []
+
+[[test]]
+name = "anchored_bare_lookahead_mid_upper"
+pattern = '^(?=.*[A-Z])'
+input = "abcDEF"
+matches = [[0, 0]]
+
+[[test]]
+name = "union_lb_branch_first_byte_disjoint_ab"
+pattern = '(^a)|([^a]a)'
+input = "ab"
+matches = [[0, 1]]
+
+[[test]]
+name = "union_lb_branch_first_byte_disjoint_ba"
+pattern = '(^a)|([^a]a)'
+input = "ba"
+matches = [[0, 2]]
+
+[[test]]
+name = "union_lb_branch_first_byte_disjoint_aa"
+pattern = '(^a)|([^a]a)'
+input = "aa"
+matches = [[0, 1]]
+
+[[test]]
+name = "union_lb_branch_first_byte_disjoint_dashes_1"
+pattern = '(^---)|([^-]---)'
+input = "---x"
+matches = [[0, 3]]
+
+[[test]]
+name = "union_lb_branch_first_byte_disjoint_dashes_2"
+pattern = '(^---)|([^-]---)'
+input = "a---x"
+matches = [[0, 4]]
+
+[[test]]
+name = "union_lb_branch_first_byte_disjoint_dashes_3"
+pattern = '(^---)|([^-]---)'
+input = "----"
+matches = [[0, 3]]

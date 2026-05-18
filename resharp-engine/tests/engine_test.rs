@@ -1,62 +1,15 @@
+mod common;
+use common::schemas::{EngineCase, EngineFile, InternalFile};
 use resharp::{Error, Regex, RegexOptions};
 use std::path::Path;
 
-struct TestCase {
-    name: String,
-    pattern: String,
-    input: String,
-    matches: Vec<(usize, usize)>,
-    ignore: bool,
-    expect_error: bool,
-    anchored: bool,
-    vs_regex: bool,
-}
-
-fn load_tests(filename: &str) -> Vec<TestCase> {
+fn load_tests(filename: &str) -> Vec<EngineCase> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join(filename);
     let content = std::fs::read_to_string(&path).unwrap();
-    let table: toml::Value = content.parse().unwrap();
-    let tests = table["test"].as_array().unwrap();
-    tests
-        .iter()
-        .map(|t| TestCase {
-            name: t
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            pattern: t["pattern"].as_str().unwrap().to_string(),
-            input: t
-                .get("input")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            matches: t
-                .get("matches")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .map(|m| {
-                            let a = m.as_array().unwrap();
-                            (
-                                a[0].as_integer().unwrap() as usize,
-                                a[1].as_integer().unwrap() as usize,
-                            )
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
-            ignore: t.get("ignore").and_then(|v| v.as_bool()).unwrap_or(false),
-            expect_error: t
-                .get("expect_error")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false),
-            anchored: t.get("anchored").and_then(|v| v.as_bool()).unwrap_or(false),
-            vs_regex: t.get("vs_regex").and_then(|v| v.as_bool()).unwrap_or(false),
-        })
-        .collect()
+    let file: EngineFile = toml::from_str(&content).unwrap();
+    file.test
 }
 
 fn run_file(filename: &str) {
@@ -100,7 +53,7 @@ fn run_file(filename: &str) {
         });
         if tc.anchored {
             let m = re.find_anchored(tc.input.as_bytes()).unwrap();
-            let result: Vec<(usize, usize)> = m.iter().map(|m| (m.start, m.end)).collect();
+            let result: Vec<[usize; 2]> = m.iter().map(|m| [m.start, m.end]).collect();
             assert_eq!(
                 result, tc.matches,
                 "file={}, name={:?}, pattern={:?}, input={:?} (anchored)",
@@ -108,7 +61,7 @@ fn run_file(filename: &str) {
             );
         } else {
             let matches = re.find_all(tc.input.as_bytes()).unwrap();
-            let result: Vec<(usize, usize)> = matches.iter().map(|m| (m.start, m.end)).collect();
+            let result: Vec<[usize; 2]> = matches.iter().map(|m| [m.start, m.end]).collect();
             assert_eq!(
                 result, tc.matches,
                 "file={}, name={:?}, pattern={:?}, input={:?}",
@@ -178,7 +131,7 @@ fn run_file_javascript(filename: &str) {
             )
         });
         let matches = re.find_all(tc.input.as_bytes()).unwrap();
-        let result: Vec<(usize, usize)> = matches.iter().map(|m| (m.start, m.end)).collect();
+        let result: Vec<[usize; 2]> = matches.iter().map(|m| [m.start, m.end]).collect();
         assert_eq!(
             result, tc.matches,
             "JS file={}, name={:?}, pattern={:?}, input={:?}",
@@ -658,7 +611,7 @@ fn run_file_hardened(filename: &str) {
                 filename, tc.name, tc.pattern, tc.input, e
             )
         });
-        let result: Vec<(usize, usize)> = matches.iter().map(|m| (m.start, m.end)).collect();
+        let result: Vec<[usize; 2]> = matches.iter().map(|m| [m.start, m.end]).collect();
         assert_eq!(
             result, tc.matches,
             "HARDENED file={}, name={:?}, pattern={:?}, input={:?}",
@@ -753,7 +706,7 @@ fn check_hardened_vs_normal(pattern: &str, input: &[u8]) {
     let opts = RegexOptions::default().hardened(true);
     let re_s = match Regex::with_options(pattern, opts) {
         Ok(re) => re,
-        Err(_) => return, // skip patterns that fail in hardened mode (e.g. lookaround)
+        Err(_) => return,
     };
     let re_n = Regex::new(pattern).unwrap();
     let normal = re_n.find_all(input).unwrap();
@@ -850,7 +803,7 @@ fn range_prefix_correctness() {
         b"",
         b"Z",
         b"ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
-        &[0u8; 100],                              
+        &[0u8; 100],
     ];
     let patterns = [
         r"[A-Z]+",
@@ -982,7 +935,7 @@ fn hardened_cross_validate_all_toml() {
                 activated += 1;
             }
             let matches = re.find_all(tc.input.as_bytes()).unwrap();
-            let result: Vec<(usize, usize)> = matches.iter().map(|m| (m.start, m.end)).collect();
+            let result: Vec<[usize; 2]> = matches.iter().map(|m| [m.start, m.end]).collect();
             assert_eq!(
                 result,
                 tc.matches,
@@ -1004,36 +957,13 @@ fn hardened_cross_validate_all_toml() {
     );
 }
 
-struct InternalTestCase {
-    name: String,
-    pattern: String,
-    pp: String,
-    ts_rev: Option<String>,
-}
-
-fn load_internal_tests(filename: &str) -> Vec<InternalTestCase> {
+fn load_internal_tests(filename: &str) -> Vec<common::schemas::InternalCase> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join(filename);
     let content = std::fs::read_to_string(&path).unwrap();
-    let table: toml::Value = content.parse().unwrap();
-    let tests = table["test"].as_array().unwrap();
-    tests
-        .iter()
-        .map(|t| InternalTestCase {
-            name: t
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            pattern: t["pattern"].as_str().unwrap().to_string(),
-            pp: t["pp"].as_str().unwrap().to_string(),
-            ts_rev: t
-                .get("ts_rev")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-        })
-        .collect()
+    let file: InternalFile = toml::from_str(&content).unwrap();
+    file.test
 }
 
 fn run_file_internal(filename: &str) {
@@ -1089,6 +1019,32 @@ fn word_boundary_inference() {
 fn alt_embedded_line_anchor_compiles_ok() {
     assert!(Regex::new(r"^a|^b").is_ok());
     assert!(Regex::new(r"^(ab)").is_ok());
+}
+
+#[test]
+fn not_word_boundary_thousands_sep() {
+    // classic "insert thousands separator" zero-width pattern.
+    // matches positions between digits where a comma would go.
+    let re = Regex::new(r"\B(?!\.\d*)(?=(\d{3})+(?!\d))").unwrap();
+    let input = b"1234567";
+    let ms = re.find_all(input).unwrap();
+    let starts: Vec<usize> = ms.iter().map(|m| m.start).collect();
+    assert_eq!(starts, vec![1, 4]);
+
+    let re2 = Regex::new(r"\B(?!\.\d*)(?=(\d{3})+(?!\d))").unwrap();
+    let ms2 = re2.find_all(b"1234.5").unwrap();
+    let starts2: Vec<usize> = ms2.iter().map(|m| m.start).collect();
+    assert_eq!(starts2, vec![1]);
+}
+
+#[test]
+fn not_word_boundary_before_upper_run() {
+    let re = Regex::new(r"\B(?=[A-Z]{2,})").unwrap();
+    let ms = re.find_all(b"fooBAR baz QUX").unwrap();
+    let starts: Vec<usize> = ms.iter().map(|m| m.start).collect();
+    // matches at every position where both sides are word chars and 2+ uppercase
+    // letters follow: "fooBAR" -> 3 (o|BA), 4 (B|AR); "QUX" -> 12 (Q|UX).
+    assert_eq!(starts, vec![3, 4, 12]);
 }
 
 #[test]
@@ -1347,7 +1303,6 @@ fn empty_language_short_circuits() {
     assert_eq!(re.is_match(b"").unwrap(), false);
 }
 
-
 #[test]
 fn trailing_star_yields_to_fwd_prefix_kind() {
     use resharp::UnicodeMode;
@@ -1556,44 +1511,15 @@ mod prefix_toml {
             .join(";")
     }
 
-    const KINDS: &[&str] = &[
-        "prefix_rev",
-        "prefix_fwd",
-        "potential_rev",
-        "potential_fwd",
-        "kind",
-    ];
+    use super::common::schemas::PrefixFile;
 
-    struct PrefixTestCase {
-        name: String,
-        pattern: String,
-        ignore: bool,
-        checks: Vec<(&'static str, String)>,
-    }
-
-    fn load_prefix_tests() -> Vec<PrefixTestCase> {
+    fn load_prefix_tests() -> Vec<super::common::schemas::PrefixCase> {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
             .join("prefix.toml");
         let content = std::fs::read_to_string(&path).unwrap();
-        let table: toml::Value = content.parse().unwrap();
-        let tests = table["test"].as_array().unwrap();
-        tests
-            .iter()
-            .map(|t| PrefixTestCase {
-                name: t["name"].as_str().unwrap().to_string(),
-                pattern: t["pattern"].as_str().unwrap().to_string(),
-                ignore: t.get("ignore").and_then(|v| v.as_bool()).unwrap_or(false),
-                checks: KINDS
-                    .iter()
-                    .filter_map(|&kind| {
-                        t.get(kind)
-                            .and_then(|v| v.as_str())
-                            .map(|expected| (kind, expected.to_string()))
-                    })
-                    .collect(),
-            })
-            .collect()
+        let file: PrefixFile = toml::from_str(&content).unwrap();
+        file.test
     }
 
     #[test]
@@ -1602,66 +1528,45 @@ mod prefix_toml {
             if tc.ignore {
                 continue;
             }
-            let needs_sets = tc.checks.iter().any(|(k, _)| *k != "kind");
+            let needs_sets = tc.prefix_rev.is_some()
+                || tc.potential_rev.is_some()
+                || tc.potential_fwd.is_some();
             let sets_pair = needs_sets.then(|| make_prefix_sets(&tc.pattern));
-            let kind_result = tc.checks.iter().find(|(k, _)| *k == "kind").map(|_| {
-                resharp::Regex::new(&tc.pattern)
-                    .unwrap()
-                    .prefix_kind_name()
-                    .unwrap_or("None")
-                    .to_string()
-            });
-            for (kind, expected) in &tc.checks {
-                let result = if *kind == "kind" {
-                    kind_result.clone().unwrap()
-                } else {
-                    let (b, sets) = sets_pair.as_ref().unwrap();
-                    match *kind {
-                        "prefix_rev" => pp_sets(b, &sets.rev_anchored.sets),
-                        "potential_rev" => pp_sets(b, &sets.rev_potential.sets),
-                        "potential_fwd" => pp_sets(b, &sets.fwd_potential.sets),
-                        k => panic!("unknown prefix test kind: {}", k),
+            let check = |kind: &str, expected: &str| {
+                let result = match kind {
+                    "kind" => resharp::Regex::new(&tc.pattern)
+                        .unwrap()
+                        .prefix_kind_name()
+                        .unwrap_or("None")
+                        .to_string(),
+                    other => {
+                        let (b, sets) = sets_pair.as_ref().unwrap();
+                        match other {
+                            "prefix_rev" => pp_sets(b, &sets.rev_anchored.sets),
+                            "potential_rev" => pp_sets(b, &sets.rev_potential.sets),
+                            "potential_fwd" => pp_sets(b, &sets.fwd_potential.sets),
+                            k => panic!("unknown prefix test kind: {}", k),
+                        }
                     }
                 };
                 assert_eq!(
-                    result, *expected,
+                    result, expected,
                     "prefix test failed: name={}, kind={}",
                     tc.name, kind
                 );
-            }
+            };
+            if let Some(e) = &tc.kind { check("kind", e); }
+            if let Some(e) = &tc.prefix_rev { check("prefix_rev", e); }
+            if let Some(e) = &tc.potential_rev { check("potential_rev", e); }
+            if let Some(e) = &tc.potential_fwd { check("potential_fwd", e); }
         }
     }
 }
 
 mod accel_skip {
+    use super::common::schemas::EngineFile;
     use resharp::{Regex, RegexOptions};
     use std::path::Path;
-
-    fn load_tests(path: &str) -> Vec<(String, String, Vec<(usize, usize)>)> {
-        let content = std::fs::read_to_string(path).unwrap();
-        let table: toml::Value = content.parse().unwrap();
-        let tests = table["test"].as_array().unwrap();
-        tests
-            .iter()
-            .map(|t| {
-                let pattern = t["pattern"].as_str().unwrap().to_string();
-                let input = t["input"].as_str().unwrap().to_string();
-                let matches: Vec<(usize, usize)> = t["matches"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|m| {
-                        let arr = m.as_array().unwrap();
-                        (
-                            arr[0].as_integer().unwrap() as usize,
-                            arr[1].as_integer().unwrap() as usize,
-                        )
-                    })
-                    .collect();
-                (pattern, input, matches)
-            })
-            .collect()
-    }
 
     #[test]
     #[ignore = "slow in debug; run with --ignored or in release"]
@@ -1669,28 +1574,30 @@ mod accel_skip {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
             .join("accel_skip.toml");
-        let tests = load_tests(path.to_str().unwrap());
-        for (pattern, input, expected) in &tests {
+        let content = std::fs::read_to_string(&path).unwrap();
+        let file: EngineFile = toml::from_str(&content).unwrap();
+        for tc in file.test {
             let re = Regex::with_options(
-                pattern,
+                &tc.pattern,
                 RegexOptions {
                     max_dfa_capacity: 10000,
                     ..Default::default()
                 },
             )
             .unwrap();
-            let matches = re.find_all(input.as_bytes()).unwrap();
-            let result: Vec<(usize, usize)> = matches.iter().map(|m| (m.start, m.end)).collect();
+            let matches = re.find_all(tc.input.as_bytes()).unwrap();
+            let result: Vec<[usize; 2]> = matches.iter().map(|m| [m.start, m.end]).collect();
             assert_eq!(
-                result, *expected,
+                result, tc.matches,
                 "lazy: pattern={:?}, input={:?}",
-                pattern, input
+                tc.pattern, tc.input
             );
         }
     }
 }
 
 mod auto_harden {
+    use super::common::schemas::AutoHardenFile;
     use resharp::{Regex, RegexOptions};
     use std::path::Path;
 
@@ -1700,30 +1607,28 @@ mod auto_harden {
             .join("tests")
             .join("auto_harden.toml");
         let content = std::fs::read_to_string(&path).unwrap();
-        let table: toml::Value = content.parse().unwrap();
-        let tests = table["test"].as_array().unwrap();
-        for t in tests {
-            let pattern = t["pattern"].as_str().unwrap();
-            let expected = t["hardened"].as_bool().unwrap();
-            let re = Regex::new(pattern).expect("pattern compiles");
+        let file: AutoHardenFile = toml::from_str(&content).unwrap();
+        for tc in file.test {
+            let re = Regex::new(&tc.pattern).expect("pattern compiles");
             assert_eq!(
                 re.is_hardened(),
-                expected,
+                tc.hardened,
                 "pattern={:?}: expected is_hardened={}, got {}",
-                pattern,
-                expected,
+                tc.pattern,
+                tc.hardened,
                 re.is_hardened()
             );
-            if expected {
+            if tc.hardened {
                 let hardened =
-                    Regex::with_options(pattern, RegexOptions::default().hardened(true)).unwrap();
+                    Regex::with_options(&tc.pattern, RegexOptions::default().hardened(true))
+                        .unwrap();
                 let inputs: &[&[u8]] = &[b"", b"aaaaaaaa", b"abcdefg", b"|  |\n| a |\n|  |"];
                 for input in inputs {
                     assert_eq!(
                         re.find_all(input).unwrap(),
                         hardened.find_all(input).unwrap(),
                         "pattern={:?} input={:?}",
-                        pattern,
+                        tc.pattern,
                         input
                     );
                 }
@@ -1732,155 +1637,15 @@ mod auto_harden {
     }
 }
 
-mod deriv {
-    use resharp::{NodeId, RegexBuilder};
-    use resharp_algebra::nulls::Nullability;
-    use std::path::Path;
-
-    struct DerivTestCase {
-        name: String,
-        pattern: String,
-        ignore: bool,
-        input: String,
-        rev: Vec<Option<String>>,
-        fwd: Vec<Option<String>>,
-        rev_nulls: Option<Vec<usize>>,
-        fwd_nulls: Option<Vec<usize>>,
-    }
-
-    fn parse_null_positions(t: &toml::Value, key: &str) -> Option<Vec<usize>> {
-        t.get(key).and_then(|v| v.as_array()).map(|arr| {
-            arr.iter()
-                .map(|e| e.as_integer().expect("null pos must be integer") as usize)
-                .collect()
-        })
-    }
-
-    fn parse_expected(t: &toml::Value, key: &str) -> Vec<Option<String>> {
-        t.get(key)
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .map(|e| {
-                        let s = e.as_str().unwrap();
-                        if s == "?" {
-                            None
-                        } else {
-                            Some(s.to_string())
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    fn load_tests() -> Vec<DerivTestCase> {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("deriv.toml");
-        let content = std::fs::read_to_string(&path).unwrap();
-        let table: toml::Value = content.parse().unwrap();
-        let tests = table["test"].as_array().unwrap();
-        tests
-            .iter()
-            .map(|t| DerivTestCase {
-                name: t["name"].as_str().unwrap().to_string(),
-                pattern: t["pattern"].as_str().unwrap().to_string(),
-                ignore: t.get("ignore").and_then(|v| v.as_bool()).unwrap_or(false),
-                input: t
-                    .get("input")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                rev: parse_expected(t, "rev"),
-                fwd: parse_expected(t, "fwd"),
-                rev_nulls: parse_null_positions(t, "rev_nulls"),
-                fwd_nulls: parse_null_positions(t, "fwd_nulls"),
-            })
-            .collect()
-    }
-
-    fn pos_mask(pos: usize, n: usize) -> Nullability {
-        if n == 0 {
-            Nullability::BEGIN.or(Nullability::END)
-        } else if pos == 0 {
-            Nullability::BEGIN
-        } else if pos == n {
-            Nullability::END
-        } else {
-            Nullability::CENTER
-        }
-    }
-
-    fn walk_bytes(
-        b: &mut RegexBuilder,
-        mut node: NodeId,
-        bytes: &[u8],
-        expected: &[Option<String>],
-        expected_nulls: Option<&[usize]>,
-        dir: &str,
-        name: &str,
-    ) {
-        assert_eq!(
-            bytes.len(),
-            expected.len(),
-            "input length must match {dir} expected length for {name}"
-        );
-        let n = bytes.len();
-        let report_null = |b: &mut RegexBuilder, node: NodeId, pos: usize, label: &str| -> bool {
-            let mask = pos_mask(pos, n);
-            let null = b.nullability(node).has(mask);
-            eprintln!(
-                "  [{}] {} pos={} mask={:?} nullable={}",
-                dir, label, pos, mask, null
-            );
-            null
-        };
-        let mut got_nulls: Vec<usize> = Vec::new();
-        if report_null(b, node, 0, "initial") {
-            got_nulls.push(0);
-        }
-        for (i, byte) in bytes.iter().enumerate() {
-            let der_mask = pos_mask(i, n);
-            let tset = b.solver().u8_to_set_id(*byte);
-            let tregex = b.der(node, der_mask).unwrap();
-            let next = b.transition_term(tregex, tset);
-            let pp = b.pp(next);
-            eprintln!(
-                "  [{}] step={} byte='{}' (0x{:02x}) der_mask={:?} node={:?} => {}",
-                dir, i, *byte as char, byte, der_mask, next, pp
-            );
-            if let Some(exp) = &expected[i] {
-                assert_eq!(
-                    pp, *exp,
-                    "deriv pp mismatch: name={} dir={} step={} byte='{}'",
-                    name, dir, i, *byte as char
-                );
-            }
-            node = next;
-            if report_null(b, node, i + 1, "after") {
-                got_nulls.push(i + 1);
-            }
-        }
-        if let Some(exp) = expected_nulls {
-            assert_eq!(
-                got_nulls, exp,
-                "nullability mismatch: name={} dir={}\n  got:      {:?}\n  expected: {:?}",
-                name, dir, got_nulls, exp
-            );
-        }
-    }
-
-    /// Regression: `init_contributes_pos` must record an empty match `(pos, pos)`
-    /// when the always-nullable initial state transitions to DEAD on the byte
-    /// at `pos`. Without it, intermediate empty matches at positions where
-    /// the initial-state transition dies are lost in the FAS hardened scan.
-    /// Triggered by patterns that are simultaneously always-nullable AND have
-    /// a non-nullable cycle (forcing hardened mode).
+mod hardened_regressions {
     #[test]
     fn hardened_always_nullable_empty_matches() {
         use resharp::{Regex, RegexOptions, UnicodeMode};
-        let mk = || RegexOptions::default().unicode(UnicodeMode::Javascript).hardened(true);
+        let mk = || {
+            RegexOptions::default()
+                .unicode(UnicodeMode::Javascript)
+                .hardened(true)
+        };
         let cases: &[(&str, &[u8], &[(usize, usize)])] = &[
             ("(?:b*c|)", b"yy", &[(0, 0), (1, 1), (2, 2)]),
             ("(?:[^<]*<[\\w\\W]+>[^>]*$|)", b"x", &[(0, 0), (1, 1)]),
@@ -1897,77 +1662,66 @@ mod deriv {
                 .map(|m| (m.start, m.end))
                 .collect();
             assert_eq!(
-                got, *expected,
+                got,
+                *expected,
                 "pattern={pat:?} input={:?}",
                 std::str::from_utf8(input).unwrap()
             );
         }
     }
+}
 
-    #[test]
-    fn test_deriv_toml() {
-        for tc in load_tests() {
-            if tc.ignore {
-                continue;
-            }
-            let mut b = RegexBuilder::new();
-            let node = resharp_parser::parse_ast(&mut b, &tc.pattern).unwrap();
 
-            if !tc.rev.is_empty() || tc.rev_nulls.is_some() {
-                let rev = b.reverse(node).unwrap();
-                let rev = b.normalize_rev(rev).unwrap();
-                let rev = b.mk_concat(NodeId::TS, rev);
+#[test]
+fn anchored_rev_intersection_complement_missed_by_find_all() {
+    use resharp::Regex;
+    let cases: &[(&str, &[u8], (usize, usize))] = &[
+        ("x(_*b&~(b_+))", b"xab", (0, 3)),
+        ("foo(_*bar&~(_*bar_+))", b"foo123bar", (0, 9)),
+    ];
+    for (pat, hay, expected) in cases {
+        let r = Regex::new(pat).unwrap();
+        let anchored = r.find_anchored(hay).unwrap();
 
-                eprintln!(
-                    "\n[{}] rev initial: node={:?} pp={}",
-                    tc.name,
-                    rev,
-                    b.pp(rev)
-                );
-                let bytes: Vec<u8> = tc.input.as_bytes().iter().rev().copied().collect();
-                let empty_rev = vec![None; bytes.len()];
-                let rev_pp = if tc.rev.is_empty() {
-                    &empty_rev
-                } else {
-                    &tc.rev
-                };
-                walk_bytes(
-                    &mut b,
-                    rev,
-                    &bytes,
-                    rev_pp,
-                    tc.rev_nulls.as_deref(),
-                    "rev",
-                    &tc.name,
-                );
-            }
+        assert_eq!(
+            anchored.map(|m| (m.start, m.end)),
+            Some(*expected),
+            "find_anchored sanity for {pat}"
+        );
+        let all = r.find_all(hay).unwrap();
 
-            if !tc.fwd.is_empty() || tc.fwd_nulls.is_some() {
-                eprintln!(
-                    "\n[{}] fwd initial: node={:?} kind={:?} pp={}",
-                    tc.name,
-                    node,
-                    b.get_kind(node),
-                    b.pp(node)
-                );
-                let bytes: Vec<u8> = tc.input.as_bytes().to_vec();
-                let empty_fwd = vec![None; bytes.len()];
-                let fwd_pp = if tc.fwd.is_empty() {
-                    &empty_fwd
-                } else {
-                    &tc.fwd
-                };
-                walk_bytes(
-                    &mut b,
-                    node,
-                    &bytes,
-                    fwd_pp,
-                    tc.fwd_nulls.as_deref(),
-                    "fwd",
-                    &tc.name,
-                );
-            }
-        }
+        println!("anchored: {:?}", anchored);
+        println!("all: {:?}", all);
+
+        let spans: Vec<_> = all.iter().map(|m| (m.start, m.end)).collect();
+        assert!(
+            spans.contains(expected),
+            "find_all missed match {expected:?} that find_anchored accepts; got {spans:?} for pat={pat}"
+        );
+        assert!(
+            r.is_match(hay).unwrap(),
+            "is_match disagrees with find_anchored for {pat}"
+        );
+    }
+}
+
+#[test]
+fn word_boundary_between_word_chars_should_not_match() {
+    use resharp::Regex;
+    let cases: &[(&str, &[u8], &[(usize, usize)])] = &[
+        (r"cat\b\w*", b"category", &[]),
+        (r"<script\b[^<]*", b"<scripts!</script>)<", &[]),
+        (r"cat\b", b"category", &[]),
+        (r"cat\b", b"cat dog", &[(0, 3)]),
+        (r"(?i)cat\b\w*", b"category", &[]),
+        (r"(?i)<script\b[^<]*", b"<scripts!</script>)<", &[]),
+    ];
+    for (pat, hay, expected) in cases {
+        let r = Regex::new(pat).unwrap();
+        let all = r.find_all(hay).unwrap();
+        let spans: Vec<_> = all.iter().map(|m| (m.start, m.end)).collect();
+        eprintln!("pat={pat} hay={:?} -> {:?}", std::str::from_utf8(hay).unwrap(), spans);
+        assert_eq!(&spans[..], *expected, "pat={pat} hay={:?}", std::str::from_utf8(hay).unwrap());
     }
 }
 

@@ -40,6 +40,7 @@ regex-automata = "0.4.14"
 aho-corasick = "1"
 serde_json = "1"
 memmap2 = "0.9"
+schemars = "0.8"
 
 # rayon doesn't compile on wasi
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

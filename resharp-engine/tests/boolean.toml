@@ -248,3 +248,9 @@ name = "dotstar_huck_stripped_prefix"
 pattern = '.*Huck.*&~(.*F.*)'
 input = "The Adventures of Huckleberry Finn', published in 1885."
 matches = [[0, 30]]
+
+[[test]]
+name = "lazy_intersection_complement_minimal"
+pattern = "x(_*b&~(b_+))"
+input = "xab"
+matches = [[0, 3]]

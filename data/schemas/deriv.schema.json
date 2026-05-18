@@ -1,0 +1,86 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DerivFile",
+  "type": "object",
+  "required": [
+    "test"
+  ],
+  "properties": {
+    "description": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "test": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/DerivCase"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "DerivCase": {
+      "type": "object",
+      "required": [
+        "name",
+        "pattern"
+      ],
+      "properties": {
+        "fwd": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "fwd_nulls": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0.0
+          }
+        },
+        "ignore": {
+          "default": false,
+          "type": "boolean"
+        },
+        "input": {
+          "default": "",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "pattern": {
+          "type": "string"
+        },
+        "rev": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rev_nulls": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0.0
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

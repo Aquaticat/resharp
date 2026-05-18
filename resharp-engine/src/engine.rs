@@ -809,10 +809,9 @@ impl LDFA {
         if curr <= DFA_DEAD as u32 {
             return Ok(if has_empty { pos_begin } else { NO_MATCH });
         }
-
         let end = data.len();
         let mut pos = pos_begin + 1;
-        let mut max_end: usize = 0;
+        let mut max_end: usize = NO_MATCH;
 
         let mask = if pos == end {
             Nullability::END
@@ -887,7 +886,7 @@ impl LDFA {
 
     #[inline]
     fn resolve_max_end(&self, max_end: usize, has_empty: bool, pos_begin: usize) -> usize {
-        if max_end > 0 {
+        if max_end != NO_MATCH {
             max_end
         } else if has_empty {
             pos_begin
@@ -926,7 +925,7 @@ impl LDFA {
         if nulls[nulls.len() - 1] == 0 {
             i = i - 1;
             l_pos = 0;
-            let mut l_max_end = 0;
+            let mut l_max_end = NO_MATCH;
 
             // manually take first step
             let mt = self.mt_lookup[data[l_pos] as usize] as u32;
@@ -986,7 +985,7 @@ impl LDFA {
             }
 
             let mut l_state = DFA_INITIAL as u32;
-            let mut l_max_end = 0;
+            let mut l_max_end = NO_MATCH;
             loop {
                 let tables = self.scan_tables(data);
                 let (state, new_pos, new_max, cache_miss) =
@@ -1154,7 +1153,7 @@ impl LDFA {
         let end = data.len();
         let mut pos = pos_begin;
         let mut curr = state;
-        let mut max_end: usize = 0;
+        let mut max_end: usize = NO_MATCH;
 
         collect_max_fwd(
             &self.effects_id,
@@ -1174,7 +1173,7 @@ impl LDFA {
                 Nullability::END,
                 &mut max_end,
             );
-            return Ok(if max_end > 0 { max_end } else { NO_MATCH });
+            return Ok(max_end);
         }
 
         loop {
@@ -1215,7 +1214,7 @@ impl LDFA {
             }
         }
 
-        Ok(if max_end > 0 { max_end } else { NO_MATCH })
+        Ok(max_end)
     }
 
     pub fn scan_rev_from(
@@ -1650,7 +1649,7 @@ fn collect_max<const REV: bool>(
             if REV {
                 *best = (*best).min(pos);
             } else {
-                *best = (*best).max(pos);
+                *best = if *best == NO_MATCH { pos } else { (*best).max(pos) };
             }
         }
         return;
@@ -1660,7 +1659,8 @@ fn collect_max<const REV: bool>(
         if REV {
             *best = (*best).min(pos + n.rel as usize);
         } else {
-            *best = (*best).max(pos - n.rel as usize);
+            let cand = pos - n.rel as usize;
+            *best = if *best == NO_MATCH { cand } else { (*best).max(cand) };
         }
     }
 }
@@ -1816,7 +1816,7 @@ unsafe fn fwd_update<const IS_END: bool>(
         return max_end;
     }
     if eid == EID_CENTER0 as u16 {
-        return max_end.max(pos);
+        return if max_end == NO_MATCH { pos } else { max_end.max(pos) };
     }
     let v = unsafe { &*effects.add(eid as usize) };
     debug_assert!(v.windows(2).all(|w| w[0].rel >= w[1].rel));
@@ -1826,7 +1826,10 @@ unsafe fn fwd_update<const IS_END: bool>(
         v.last()
     };
     match pick {
-        Some(n) => max_end.max(pos - n.rel as usize),
+        Some(n) => {
+            let cand = pos - n.rel as usize;
+            if max_end == NO_MATCH { cand } else { max_end.max(cand) }
+        }
         None => max_end,
     }
 }

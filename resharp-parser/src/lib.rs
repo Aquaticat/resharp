@@ -19,7 +19,7 @@ use regex_syntax::{
     },
     utf8::Utf8Sequences,
 };
-use resharp_algebra::NodeId;
+use resharp_algebra::{Kind, NodeId};
 
 type TB<'s> = resharp_algebra::RegexBuilder;
 
@@ -1204,7 +1204,12 @@ impl<'s> ResharpParser<'s> {
                     inner
                 }
             }
-            Ast::Lookaround(la) => Self::word_char_kind(&la.ast, left),
+            Ast::Lookaround(la) => match la.kind {
+                ast::LookaroundKind::PositiveLookahead | ast::LookaroundKind::PositiveLookbehind => {
+                    Self::word_char_kind(&la.ast, left)
+                }
+                _ => Unknown,
+            },
             _ => Unknown,
         }
     }
@@ -1257,17 +1262,66 @@ impl<'s> ResharpParser<'s> {
         let neighbor_idx = (idx as isize + dir) as usize;
         let node = if let Some(edge) = Self::edge_class_ast(&asts[neighbor_idx], dir < 0) {
             self.ast_to_node_id(edge, translator, tb)?
+        } else if dir > 0 {
+            let mut bodies: Vec<NodeId> = vec![];
+            let mut j = neighbor_idx;
+            while j < asts.len() {
+                match &asts[j] {
+                    Ast::Lookaround(la) => {
+                        let kind = la.kind.clone();
+                        let lookbehind = matches!(
+                            kind,
+                            ast::LookaroundKind::PositiveLookbehind
+                                | ast::LookaroundKind::NegativeLookbehind
+                        );
+                        if lookbehind {
+                            j += 1;
+                            continue;
+                        }
+                        let body = self.ast_to_node_id(&la.ast, translator, tb)?;
+                        let body = tb.try_elim_lookarounds(body).ok_or_else(|| {
+                            self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex)
+                        })?;
+                        let body_ts = tb.mk_concat(body, NodeId::TS);
+                        let constraint = match kind {
+                            ast::LookaroundKind::PositiveLookahead => body_ts,
+                            ast::LookaroundKind::NegativeLookahead => tb.mk_compl(body_ts),
+                            _ => unreachable!(),
+                        };
+                        bodies.push(constraint);
+                        j += 1;
+                    }
+                    other => {
+                        let n = self.ast_to_node_id(other, translator, tb)?;
+                        let n = tb.try_elim_lookarounds(n).ok_or_else(|| {
+                            self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex)
+                        })?;
+                        bodies.push(tb.mk_concat(n, NodeId::TS));
+                        break;
+                    }
+                }
+            }
+            if bodies.is_empty() {
+                return Ok(Unknown);
+            }
+            let combined = tb.mk_inters(bodies.into_iter());
+            let word_prefix = tb.mk_concat(word_id, NodeId::TS);
+            let non_word_prefix = tb.mk_concat(not_word_id, NodeId::TS);
+            return if tb.subsumes(word_prefix, combined) == Some(true) {
+                Ok(Word)
+            } else if tb.subsumes(non_word_prefix, combined) == Some(true) {
+                Ok(NonWord)
+            } else {
+                Ok(Unknown)
+            };
         } else {
-            // check if \w_* (starts-with-word) or \W_* (starts-with-non-word) subsumes it.
             let neighbor_node = self.ast_to_node_id(&asts[neighbor_idx], translator, tb)?;
             let mut neighbor_node = tb
                 .try_elim_lookarounds(neighbor_node)
                 .ok_or_else(|| self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex))?;
-            if dir < 0 {
-                neighbor_node = tb.reverse(neighbor_node).or_else(|_| {
-                    Err(self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex))
-                })?;
-            }
+            neighbor_node = tb.reverse(neighbor_node).or_else(|_| {
+                Err(self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex))
+            })?;
             let word_prefix = tb.mk_concat(word_id, NodeId::TS);
             let non_word_prefix = tb.mk_concat(not_word_id, NodeId::TS);
             return if tb.subsumes(word_prefix, neighbor_node) == Some(true) {
@@ -1313,6 +1367,7 @@ impl<'s> ResharpParser<'s> {
         idx: usize,
         translator: &mut Option<Translator>,
         tb: &mut TB<'s>,
+        negated: bool,
     ) -> Result<(NodeId, usize)> {
         use WordCharKind::*;
         let (word_id, not_word_id) = if self.global_full_unicode {
@@ -1331,18 +1386,46 @@ impl<'s> ResharpParser<'s> {
         };
         let left = self.resolve_word_kind(asts, idx, -1, translator, tb, word_id, not_word_id)?;
         let right = self.resolve_word_kind(asts, idx, 1, translator, tb, word_id, not_word_id)?;
+        let boundary_match = !negated;
         match (left, right) {
-            (NonWord, Word) | (Word, NonWord) => Ok((NodeId::EPS, idx + 1)),
+            (NonWord, Word) | (Word, NonWord) => Ok((
+                if boundary_match { NodeId::EPS } else { NodeId::BOT },
+                idx + 1,
+            )),
+            (Word, Word) | (NonWord, NonWord) => Ok((
+                if boundary_match { NodeId::BOT } else { NodeId::EPS },
+                idx + 1,
+            )),
             (Word, _) => {
-                let neg = tb.mk_neg_lookahead(word_id, 0);
-                Ok((neg, idx + 1))
+                if boundary_match {
+                    Ok((tb.mk_neg_lookahead(word_id, 0), idx + 1))
+                } else {
+                    let tail = tb.mk_concat(word_id, NodeId::TS);
+                    self.merge_boundary_with_following_lookaheads(asts, idx, tail, translator, tb)
+                }
             }
             (NonWord, _) => {
-                let tail = tb.mk_concat(word_id, NodeId::TS);
-                self.merge_boundary_with_following_lookaheads(asts, idx, tail, translator, tb)
+                if boundary_match {
+                    let tail = tb.mk_concat(word_id, NodeId::TS);
+                    self.merge_boundary_with_following_lookaheads(asts, idx, tail, translator, tb)
+                } else {
+                    Ok((tb.mk_neg_lookahead(word_id, 0), idx + 1))
+                }
             }
-            (_, Word) => Ok((tb.mk_neg_lookbehind(word_id), idx + 1)),
-            (_, NonWord) => Ok((tb.mk_lookbehind(word_id, NodeId::MISSING), idx + 1)),
+            (_, Word) => {
+                if boundary_match {
+                    Ok((tb.mk_neg_lookbehind(word_id), idx + 1))
+                } else {
+                    Ok((tb.mk_lookbehind(word_id, NodeId::MISSING), idx + 1))
+                }
+            }
+            (_, NonWord) => {
+                if boundary_match {
+                    Ok((tb.mk_lookbehind(word_id, NodeId::MISSING), idx + 1))
+                } else {
+                    Ok((tb.mk_neg_lookbehind(word_id), idx + 1))
+                }
+            }
             // TODO: (Unknown, Unknown) is possible via make_full_word_boundary but
             // the full expansion (lb(\w)·la(\W) | lb(\W)·la(\w)) is too expensive
             // reimplement once/if the builder is more optimized
@@ -1425,7 +1508,12 @@ impl<'s> ResharpParser<'s> {
                     Err(self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex))
                 }
                 ast::AssertionKind::NotWordBoundary => {
-                    Err(self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex))
+                    // bare \B with no surrounding concat: treat as singleton.
+                    let only = Ast::Assertion(a.clone());
+                    let asts = std::slice::from_ref(&only);
+                    let (node, _) = self
+                        .rewrite_word_boundary_in_concat(asts, 0, translator, tb, true)?;
+                    Ok(node)
                 }
                 ast::AssertionKind::StartLine => {
                     if !self.multiline.get() {
@@ -1544,10 +1632,22 @@ impl<'s> ResharpParser<'s> {
             Ast::Lookaround(g) => {
                 let body = self.ast_to_node_id(&g.ast, translator, tb)?;
                 match g.kind {
-                    ast::LookaroundKind::PositiveLookahead
-                    | ast::LookaroundKind::NegativeLookahead
-                        if body.contains_lookbehind(tb) =>
-                    {
+                    ast::LookaroundKind::PositiveLookahead if body.contains_lookbehind(tb) => {
+                        let mut prefix = NodeId::EPS;
+                        let mut rest = body;
+                        while tb.get_kind(rest) == Kind::Concat
+                            && tb.get_kind(rest.left(tb)) == Kind::Lookbehind
+                        {
+                            prefix = tb.mk_concat(prefix, rest.left(tb));
+                            rest = rest.right(tb);
+                        }
+                        if prefix == NodeId::EPS || rest.contains_lookbehind(tb) {
+                            return Err(self.error(g.span, ast::ErrorKind::UnsupportedResharpRegex));
+                        }
+                        let la = tb.mk_lookahead(rest, NodeId::MISSING, 0);
+                        Ok(tb.mk_concat(prefix, la))
+                    }
+                    ast::LookaroundKind::NegativeLookahead if body.contains_lookbehind(tb) => {
                         Err(self.error(g.span, ast::ErrorKind::UnsupportedResharpRegex))
                     }
                     ast::LookaroundKind::PositiveLookahead => {
@@ -1629,10 +1729,17 @@ impl<'s> ResharpParser<'s> {
                             continue;
                         }
                         Ast::Assertion(a) if a.kind == ast::AssertionKind::WordBoundary => {
-                            let node =
-                                self.rewrite_word_boundary_in_concat(&c.asts, i, translator, tb)?;
+                            let node = self
+                                .rewrite_word_boundary_in_concat(&c.asts, i, translator, tb, false)?;
                             children.push(node.0);
                             i = node.1; // skip consumed lookaheads
+                            continue;
+                        }
+                        Ast::Assertion(a) if a.kind == ast::AssertionKind::NotWordBoundary => {
+                            let node = self
+                                .rewrite_word_boundary_in_concat(&c.asts, i, translator, tb, true)?;
+                            children.push(node.0);
+                            i = node.1;
                             continue;
                         }
                         _ => {}

@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AutoHardenFile",
+  "type": "object",
+  "required": [
+    "test"
+  ],
+  "properties": {
+    "description": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "test": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/AutoHardenCase"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "AutoHardenCase": {
+      "type": "object",
+      "required": [
+        "hardened",
+        "pattern"
+      ],
+      "properties": {
+        "fwd": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "hardened": {
+          "type": "boolean"
+        },
+        "ignore": {
+          "default": false,
+          "type": "boolean"
+        },
+        "pattern": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

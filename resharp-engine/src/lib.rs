@@ -611,8 +611,8 @@ fn collect_union_branches(b: &RegexBuilder, node: NodeId, out: &mut Vec<NodeId>)
     }
 }
 
-/// top-level union with lookbehind is ok if each 
-/// lb branch's first-byte set is disjoint from every other branch's
+/// heuristic checks if we can support an union with lookbehinds,
+/// we wont determine which one matched so we require them to be disjoint
 fn union_branches_distinguishable(b: &mut RegexBuilder, union_node: NodeId) -> bool {
     let mut branches = Vec::new();
     collect_union_branches(b, union_node, &mut branches);
@@ -620,9 +620,17 @@ fn union_branches_distinguishable(b: &mut RegexBuilder, union_node: NodeId) -> b
     if !any_lb {
         return true;
     }
+    if b.get_fixed_length(union_node).is_some() {
+        return true;
+    }
     let mut firsts: Vec<(bool, TSetId)> = Vec::with_capacity(branches.len());
     for &br in &branches {
-        let sets = match prefix::calc_potential_start_prune(b, br, 1, 64, false) {
+        let has_lb = br.contains_lookbehind(b);
+        let stripped = match b.strip_lb(br) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let sets = match prefix::calc_potential_start_prune(b, stripped, 1, 64, false) {
             Ok(s) => s,
             Err(_) => return false,
         };
@@ -630,7 +638,7 @@ fn union_branches_distinguishable(b: &mut RegexBuilder, union_node: NodeId) -> b
             Some(&s) => s,
             None => return false,
         };
-        firsts.push((br.contains_lookbehind(b), first));
+        firsts.push((has_lb, first));
     }
     for i in 0..firsts.len() {
         if !firsts[i].0 {
@@ -1170,7 +1178,7 @@ pub(crate) fn find_strict_convergence_node(
                         out.push((head, tail));
                         true
                     }
-                    Kind::Star | Kind::Compl => collect_pred_leaves(b, tail, out),
+                    Kind::Star => collect_pred_leaves(b, tail, out),
                     Kind::Union => {
                         let l = b.mk_concat(head.left(b), tail);
                         let r = b.mk_concat(head.right(b), tail);
@@ -1183,7 +1191,6 @@ pub(crate) fn find_strict_convergence_node(
                         let flat = b.mk_concat(inner_l, new_tail);
                         collect_pred_leaves(b, flat, out)
                     }
-                    _ if b.any_nonbegin_nullable(head) => collect_pred_leaves(b, tail, out),
                     _ => false,
                 }
             }

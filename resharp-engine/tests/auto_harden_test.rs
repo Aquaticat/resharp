@@ -1,3 +1,5 @@
+mod common;
+use common::schemas::AutoHardenFile;
 use resharp::{Regex, RegexOptions};
 use std::path::Path;
 
@@ -7,42 +9,38 @@ fn auto_harden_toml() {
         .join("tests")
         .join("auto_harden.toml");
     let content = std::fs::read_to_string(&path).unwrap();
-    let table: toml::Value = content.parse().unwrap();
-    let tests = table["test"].as_array().unwrap();
-    for t in tests {
-        let pattern = t["pattern"].as_str().unwrap();
-        let expected = t["hardened"].as_bool().unwrap();
-        let expected_fwd = t.get("fwd").and_then(|v| v.as_bool());
-        let re = Regex::new(pattern).expect("pattern compiles");
+    let file: AutoHardenFile = toml::from_str(&content).unwrap();
+    for tc in file.test {
+        let re = Regex::new(&tc.pattern).expect("pattern compiles");
         assert_eq!(
             re.is_hardened(),
-            expected,
+            tc.hardened,
             "pattern={:?}: expected is_hardened={}, got {}",
-            pattern,
-            expected,
+            tc.pattern,
+            tc.hardened,
             re.is_hardened()
         );
-        if let Some(fwd) = expected_fwd {
+        if let Some(fwd) = tc.fwd {
             assert_eq!(
                 re.has_fwd_prefix(),
                 fwd,
                 "pattern={:?}: expected has_fwd_prefix={}, got {}",
-                pattern,
+                tc.pattern,
                 fwd,
                 re.has_fwd_prefix()
             );
         }
 
-        if expected {
+        if tc.hardened {
             let hardened =
-                Regex::with_options(pattern, RegexOptions::default().hardened(true)).unwrap();
+                Regex::with_options(&tc.pattern, RegexOptions::default().hardened(true)).unwrap();
             let inputs: &[&[u8]] = &[b"", b"aaaaaaaa", b"abcdefg", b"|  |\n| a |\n|  |"];
             for input in inputs {
                 assert_eq!(
                     re.find_all(input).unwrap(),
                     hardened.find_all(input).unwrap(),
                     "pattern={:?} input={:?}",
-                    pattern,
+                    tc.pattern,
                     input
                 );
             }

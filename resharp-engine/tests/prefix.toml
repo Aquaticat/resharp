@@ -59,7 +59,6 @@ potential_rev = "N;F;D"
 [[test]]
 name = "neg_la_pref"
 pattern = 'OU(?=I(?!LL)|[AEOU])'
-# prefix_rev = ""
 potential_rev = "[AEOU];U;O"
 potential_fwd = "O;U;[AEIOU]"
 kind = "AnchoredFwd"
@@ -256,4 +255,11 @@ name = "S_default_mode"
 pattern = "\\S"
 prefix_rev = ""
 potential_rev = "[\\x00-\\x08\\x0E-\\x1F!-\\xBF]"
+
+[[test]]
+name = "lazy_bar_intersection_complement"
+pattern = "x(_*b&~(b_+))"
+prefix_rev = "b"
+kind = "AnchoredRev"
+
 

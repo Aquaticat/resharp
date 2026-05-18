@@ -1073,12 +1073,15 @@ impl RegexBuilder {
                     self.get_min_max_length(right)
                 }
             }
-            Kind::Counted => (0, 0),
+            Kind::Counted => self.get_min_max_length(node_id.left(self)),
             Kind::Star | Kind::Lookbehind | Kind::Compl => (0, u32::MAX),
         }
     }
 
     pub fn get_fixed_length(&self, node_id: NodeId) -> Option<u32> {
+        if node_id == NodeId::EPS {
+            return Some(0);
+        }
         match self.get_kind(node_id) {
             Kind::End | Kind::Begin => Some(0),
             Kind::Pred => Some(1),
@@ -1106,16 +1109,12 @@ impl RegexBuilder {
                     (None, None) => None,
                 }
             }
-            Kind::Lookahead => {
-                let right = node_id.right(self);
-                if right.is_missing() {
-                    Some(0)
-                } else {
-                    self.get_fixed_length(right)
-                }
-            }
-            Kind::Counted => Some(0),
-            Kind::Star | Kind::Lookbehind | Kind::Compl => None,
+            Kind::Lookahead | Kind::Lookbehind => {
+                let prev = node_id.right(self).missing_to_eps();
+                self.get_fixed_length(prev)
+            },
+            Kind::Counted => self.get_fixed_length(node_id.left(self)),
+            Kind::Star | Kind::Compl => None,
         }
     }
 
@@ -1133,7 +1132,8 @@ impl RegexBuilder {
             Kind::Inter => self
                 .get_min_length_only(node_id.left(self))
                 .max(self.get_min_length_only(node_id.right(self))),
-            Kind::Star | Kind::Lookbehind | Kind::Lookahead | Kind::Counted => 0,
+            Kind::Star | Kind::Lookbehind | Kind::Lookahead => 0,
+            Kind::Counted => self.get_min_length_only(node_id.left(self)),
             Kind::Compl => {
                 if self.nullability(node_id.left(self)) == Nullability::NEVER {
                     0
@@ -2033,9 +2033,7 @@ impl RegexBuilder {
                     Ok(NodeId::EPS)
                 }
             }
-            Kind::Lookahead if self.get_lookahead_tail(node_id).is_missing() => {
-                Err(ResharpError::UnsupportedPattern)
-            }
+            Kind::Lookahead if self.get_lookahead_tail(node_id).is_missing() => Ok(node_id),
             _ => Ok(node_id),
         }
     }

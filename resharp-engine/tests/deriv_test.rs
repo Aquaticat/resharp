@@ -1,68 +1,16 @@
+mod common;
+use common::schemas::{DerivCase, DerivFile};
 use resharp::{NodeId, RegexBuilder};
 use resharp_algebra::nulls::Nullability;
 use std::path::Path;
 
-struct DerivTestCase {
-    name: String,
-    pattern: String,
-    ignore: bool,
-    input: String,
-    rev: Vec<Option<String>>,
-    fwd: Vec<Option<String>>,
-    rev_nulls: Option<Vec<usize>>,
-    fwd_nulls: Option<Vec<usize>>,
-}
-
-fn parse_null_positions(t: &toml::Value, key: &str) -> Option<Vec<usize>> {
-    t.get(key).and_then(|v| v.as_array()).map(|arr| {
-        arr.iter()
-            .map(|e| e.as_integer().expect("null pos must be integer") as usize)
-            .collect()
-    })
-}
-
-fn parse_expected(t: &toml::Value, key: &str) -> Vec<Option<String>> {
-    t.get(key)
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .map(|e| {
-                    let s = e.as_str().unwrap();
-                    if s == "?" {
-                        None
-                    } else {
-                        Some(s.to_string())
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn load_tests() -> Vec<DerivTestCase> {
+fn load_tests() -> Vec<DerivCase> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("deriv.toml");
     let content = std::fs::read_to_string(&path).unwrap();
-    let table: toml::Value = content.parse().unwrap();
-    let tests = table["test"].as_array().unwrap();
-    tests
-        .iter()
-        .map(|t| DerivTestCase {
-            name: t["name"].as_str().unwrap().to_string(),
-            pattern: t["pattern"].as_str().unwrap().to_string(),
-            ignore: t.get("ignore").and_then(|v| v.as_bool()).unwrap_or(false),
-            input: t
-                .get("input")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            rev: parse_expected(t, "rev"),
-            fwd: parse_expected(t, "fwd"),
-            rev_nulls: parse_null_positions(t, "rev_nulls"),
-            fwd_nulls: parse_null_positions(t, "fwd_nulls"),
-        })
-        .collect()
+    let file: DerivFile = toml::from_str(&content).unwrap();
+    file.test
 }
 
 fn pos_mask(pos: usize, n: usize) -> Nullability {
@@ -81,16 +29,18 @@ fn walk_bytes(
     b: &mut RegexBuilder,
     mut node: NodeId,
     bytes: &[u8],
-    expected: &[Option<String>],
+    expected: &[String],
     expected_nulls: Option<&[usize]>,
     dir: &str,
     name: &str,
 ) {
-    assert_eq!(
-        bytes.len(),
-        expected.len(),
-        "input length must match {dir} expected length for {name}"
-    );
+    if !expected.is_empty() {
+        assert_eq!(
+            bytes.len(),
+            expected.len(),
+            "input length must match {dir} expected length for {name}"
+        );
+    }
     let n = bytes.len();
     let report_null = |b: &mut RegexBuilder, node: NodeId, pos: usize, label: &str| -> bool {
         let mask = pos_mask(pos, n);
@@ -115,12 +65,14 @@ fn walk_bytes(
             "  [{}] step={} byte='{}' (0x{:02x}) der_mask={:?} node={:?} => {}",
             dir, i, *byte as char, byte, der_mask, next, pp
         );
-        if let Some(exp) = &expected[i] {
-            assert_eq!(
-                pp, *exp,
-                "deriv pp mismatch: name={} dir={} step={} byte='{}'",
-                name, dir, i, *byte as char
-            );
+        if let Some(exp) = expected.get(i) {
+            if exp != "?" {
+                assert_eq!(
+                    pp, *exp,
+                    "deriv pp mismatch: name={} dir={} step={} byte='{}'",
+                    name, dir, i, *byte as char
+                );
+            }
         }
         node = next;
         if report_null(b, node, i + 1, "after") {
@@ -157,17 +109,11 @@ fn test_deriv_toml() {
                 b.pp(rev)
             );
             let bytes: Vec<u8> = tc.input.as_bytes().iter().rev().copied().collect();
-            let empty_rev = vec![None; bytes.len()];
-            let rev_pp = if tc.rev.is_empty() {
-                &empty_rev
-            } else {
-                &tc.rev
-            };
             walk_bytes(
                 &mut b,
                 rev,
                 &bytes,
-                rev_pp,
+                &tc.rev,
                 tc.rev_nulls.as_deref(),
                 "rev",
                 &tc.name,
@@ -183,17 +129,11 @@ fn test_deriv_toml() {
                 b.pp(node)
             );
             let bytes: Vec<u8> = tc.input.as_bytes().to_vec();
-            let empty_fwd = vec![None; bytes.len()];
-            let fwd_pp = if tc.fwd.is_empty() {
-                &empty_fwd
-            } else {
-                &tc.fwd
-            };
             walk_bytes(
                 &mut b,
                 node,
                 &bytes,
-                fwd_pp,
+                &tc.fwd,
                 tc.fwd_nulls.as_deref(),
                 "fwd",
                 &tc.name,
