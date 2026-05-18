@@ -9,13 +9,11 @@ RE# compiles patterns into deterministic automata. All matching is non-backtrack
 
 [paper](https://dl.acm.org/doi/10.1145/3704837) | [blog post](https://iev.ee/blog/symbolic-derivatives-and-the-rust-rewrite-of-resharp/) | [syntax docs](https://github.com/ieviev/resharp/blob/main/docs/syntax.md) | [dotnet version](https://github.com/ieviev/resharp-dotnet) and [web playground](https://ieviev.github.io/resharp-webapp/)
 
-## Install
+## Quick start
 
 ```sh
 cargo add resharp
 ```
-
-## Usage
 
 ```rust
 let re = resharp::Regex::new(r".*cat.*&.*dog.*&.{8,15}").unwrap();
@@ -24,9 +22,19 @@ let matches = re.find_all(b"the cat and the dog").unwrap();
 let found = re.is_match(b"the cat and the dog").unwrap();
 ```
 
+## When to use RE# over [`regex`](https://crates.io/crates/regex)
+
+RE# operates on `&[u8]` / UTF-8 and aims to match `regex` crate throughput on standard patterns. Reach for RE# when you need:
+
+- intersection (`&`), complement (`~`), or lookarounds
+- large alternations with high throughput (at the cost of memory)
+- fail-loud behavior: capacity / lookahead overflow returns `Err` instead of silently degrading
+
+RE# is designed around `is_match` and `find_all`. It doesn't provide `find` or `captures`, but for simple cases you can often substitute `find_anchored`, or emulate a capture group with lookarounds. For example, `a(b)c` becomes `(?<=a)b(?=c)`. For anything more involved, use the `regex` crate instead.
+
 ## Syntax extensions
 
-RE# supports standard regex syntax plus three extensions: `&` (intersection), and `~(...)` (complement). `_` matches any byte, so `_*` means "any string".
+RE# supports standard regex syntax plus three extensions: `_` (any byte), `&` (intersection), and `~(...)` (complement). `_*` means "any string".
 
 ```perl
 _*                any string
@@ -40,23 +48,18 @@ _*a_*             any string that contains 'a'
 
 You combine all of these with `&` to get more complex patterns. RE# also supports lookarounds (`(?=...)`, `(?<=...)`, `(?!...)`, `(?<!...)`), compiled directly into the automaton with no backtracking.
 
-> RE# is not compatible with some `regex` crate features, eg. lazy quantifiers (`.*?`). See the full [syntax reference](docs/syntax.md) for details.
+RE# is not compatible with some `regex` crate features, eg. lazy quantifiers (`.*?`). See the full [syntax reference](docs/syntax.md) for details.
 
-### When to use RE# over [`regex`](https://crates.io/crates/regex)
+## Match semantics
 
-RE# operates on `&[u8]` / UTF-8 and aims to match `regex` crate throughput on standard patterns. Reach for RE# when you need:
+Two defaults differ from PCRE / the `regex` crate. Both can bite you on otherwise portable patterns:
 
-- intersection (`&`), complement (`~`), or lookarounds
-- large alternations with high throughput (at the cost of memory)
-- fail-loud behavior: capacity / lookahead overflow returns `Err` instead of silently degrading
+- **Leftmost-longest, not leftmost-greedy.** `y|yes|n|no` on `"yes please"` matches `yes` in RE#, `y` in PCRE / `regex`. Alternation order doesn't matter.
+- **Multiline is on by default.** `^` and `$` default to start/end of **line**. Disable with `(?-m)` or `RegexOptions::multi_line(false)` to make them start/end of input. Use `\A` and `\z` to anchor to start/end of input regardless of mode.
 
-RE# is designed around `is_match` and `find_all`. It doesn't provide `find` or `captures`, but for simple cases you can often substitute `find_anchored`, or emulate a capture group with lookarounds. For example, `a(b)c` becomes `(?<=a)b(?=c)`. For anything more involved, use the `regex` crate instead.
+Matching returns `Result<Vec<Match>, Error>`. Capacity or lookahead overflow will fail outright rather than silently degrade.
 
-> **Leftmost-longest, not leftmost-greedy (PCRE).** `y|yes|n|no` on `"yes please"` matches `yes` in RE#, `y` in PCRE / `regex`. Alternation order doesn't matter.
-
-> **Multiline is on by default.** `^` and `$` default to start/end of **line**. Disable with `(?-m)` or `RegexOptions::multi_line(false)` to make them start/end of input.
-
-Matching returns `Result<Vec<Match>, Error>`. capacity or lookahead overflow will fail outright rather than silently degrade. `RegexOptions` controls precompilation threshold, capacity, and lookahead context:
+## Configuration
 
 ```rust
 let opts = resharp::RegexOptions {
@@ -84,7 +87,9 @@ Throughput comparison with `regex` and `fancy-regex`, compiled with `--release`.
 | `Sherlock\|Holmes\|Watson\|...` (900KB) | **12.0 GiB/s** | 11.2 GiB/s | 10.1 GiB/s |
 | literal `"Sherlock Holmes"` (900KB) | 33.2 GiB/s | 34.0 GiB/s | 30.3 GiB/s |
 
-### Rockchip RK3588 ARM (5-10W TDP)
+<details>
+<summary>Rockchip RK3588 ARM (5-10W TDP), also runs well on low-power chips</summary>
+
 
 | Benchmark | resharp | regex | fancy-regex |
 |---|---|---|---|
@@ -94,6 +99,8 @@ Throughput comparison with `regex` and `fancy-regex`, compiled with `--release`.
 | lookaround `(?<=\s)[A-Z][a-z]+(?=\s)` (900KB) | **198 MiB/s** | -- | 10 MiB/s |
 | `Sherlock\|Holmes\|Watson\|...` (900KB) | 1.73 GiB/s | 2.00 GiB/s | 1.95 GiB/s |
 | literal `"Sherlock Holmes"` (900KB) | 6.74 GiB/s | 7.05 GiB/s | 6.78 GiB/s |
+
+</details>
 
 **Notes:**
 
@@ -105,4 +112,3 @@ Throughput comparison with `regex` and `fancy-regex`, compiled with `--release`.
 - **Scan direction**: RE# runs right-to-left for `find_all`, `regex` runs left-to-right. This changes where acceleration applies.
 - See also the [rebar](https://github.com/ieviev/rebar) comparison: not apples-to-apples (different match semantics, short repeated inputs), but a useful ballpark.
 - Found a pattern where RE# is >5x slower than `regex` or `fancy-regex`? Please [open an issue](https://github.com/ieviev/resharp/issues).
-
