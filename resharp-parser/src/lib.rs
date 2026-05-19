@@ -87,6 +87,60 @@ fn is_word_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
+fn class_set_item_word_kind(item: &regex_syntax::ast::ClassSetItem) -> WordCharKind {
+    use regex_syntax::ast::{ClassSetItem, ClassPerlKind};
+    use WordCharKind::*;
+    match item {
+        ClassSetItem::Empty(_) => Unknown,
+        ClassSetItem::Literal(l) => {
+            if is_word_byte(l.c as u8) { Word } else { NonWord }
+        }
+        ClassSetItem::Range(r) => {
+            let all_word = (r.start.c as u8..=r.end.c as u8).all(is_word_byte);
+            let all_non = (r.start.c as u8..=r.end.c as u8).all(|b| !is_word_byte(b));
+            if all_word { Word } else if all_non { NonWord } else { Unknown }
+        }
+        ClassSetItem::Perl(p) => match (&p.kind, p.negated) {
+            (ClassPerlKind::Word, false) => Word,
+            (ClassPerlKind::Word, true) => NonWord,
+            (ClassPerlKind::Space, false) => NonWord,
+            _ => Unknown,
+        },
+        ClassSetItem::Bracketed(b) => class_bracketed_word_kind(b),
+        ClassSetItem::Union(u) => {
+            let mut kind = Unknown;
+            for item in &u.items {
+                let k = class_set_item_word_kind(item);
+                kind = match (kind, k) {
+                    (Unknown, _) => k,
+                    (Word, Word) => Word,
+                    (NonWord, NonWord) => NonWord,
+                    _ => return Unknown,
+                };
+            }
+            kind
+        }
+        _ => Unknown,
+    }
+}
+
+fn class_bracketed_word_kind(c: &regex_syntax::ast::ClassBracketed) -> WordCharKind {
+    use WordCharKind::*;
+    let inner = match &c.kind {
+        regex_syntax::ast::ClassSet::Item(item) => class_set_item_word_kind(item),
+        regex_syntax::ast::ClassSet::BinaryOp(_) => Unknown,
+    };
+    if c.negated {
+        match inner {
+            Word => NonWord,
+            NonWord => Word,
+            _ => Unknown,
+        }
+    } else {
+        inner
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Primitive {
     Literal(Literal),
@@ -1152,6 +1206,7 @@ impl<'s> ResharpParser<'s> {
                 (&regex_syntax::ast::ClassPerlKind::Digit, false) => Word,
                 (&regex_syntax::ast::ClassPerlKind::Digit, true) => Unknown,
             },
+            Ast::ClassBracketed(c) => class_bracketed_word_kind(c),
             Ast::Dot(_) | Ast::Top(_) => Unknown,
             Ast::Group(g) => Self::word_char_kind(&g.ast, left),
             Ast::Concat(c) if !c.asts.is_empty() => {
@@ -1426,9 +1481,9 @@ impl<'s> ResharpParser<'s> {
                     Ok((tb.mk_neg_lookbehind(word_id), idx + 1))
                 }
             }
-            // TODO: (Unknown, Unknown) is possible via make_full_word_boundary but
-            // the full expansion (lb(\w)·la(\W) | lb(\W)·la(\w)) is too expensive
-            // reimplement once/if the builder is more optimized
+            // TODO: (Unknown, Unknown) would need the full expansion
+            //   \b = (?<=\w)(?!\w) | (?<!\w)(?=\w)
+            // but we don't want to do that because it's expensive so just treat it as unsupported.
             _ => Err(self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex)),
         }
     }
@@ -1505,7 +1560,11 @@ impl<'s> ResharpParser<'s> {
                 ast::AssertionKind::StartText => Ok(NodeId::BEGIN),
                 ast::AssertionKind::EndText => Ok(NodeId::END),
                 ast::AssertionKind::WordBoundary => {
-                    Err(self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex))
+                    let only = Ast::Assertion(a.clone());
+                    let asts = std::slice::from_ref(&only);
+                    let (node, _) = self
+                        .rewrite_word_boundary_in_concat(asts, 0, translator, tb, false)?;
+                    Ok(node)
                 }
                 ast::AssertionKind::NotWordBoundary => {
                     // bare \B with no surrounding concat: treat as singleton.

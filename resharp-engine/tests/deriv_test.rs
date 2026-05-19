@@ -31,6 +31,7 @@ fn walk_bytes(
     bytes: &[u8],
     expected: &[String],
     expected_nulls: Option<&[usize]>,
+    expected_effects: &[String],
     dir: &str,
     name: &str,
 ) {
@@ -42,18 +43,17 @@ fn walk_bytes(
         );
     }
     let n = bytes.len();
-    let report_null = |b: &mut RegexBuilder, node: NodeId, pos: usize, label: &str| -> bool {
-        let mask = pos_mask(pos, n);
-        let null = b.nullability(node).has(mask);
-        eprintln!(
-            "  [{}] {} pos={} mask={:?} nullable={}",
-            dir, label, pos, mask, null
-        );
-        null
+    let fmt_effects = |b: &mut RegexBuilder, node: NodeId| -> String {
+        let nulls_id = b.get_nulls_id(node);
+        let entries = b.nulls_entry_vec(nulls_id.0);
+        format!("{:?}", entries)
     };
     let mut got_nulls: Vec<usize> = Vec::new();
-    if report_null(b, node, 0, "initial") {
-        got_nulls.push(0);
+    let init_eff = fmt_effects(b, node);
+    eprintln!("  [{}] initial pos=0 effects={}", dir, init_eff);
+    {
+        let nulls_id = b.get_nulls_id(node);
+        for e in b.nulls_entry_vec(nulls_id.0) { got_nulls.push(e.rel as usize); }
     }
     for (i, byte) in bytes.iter().enumerate() {
         let der_mask = pos_mask(i, n);
@@ -75,8 +75,18 @@ fn walk_bytes(
             }
         }
         node = next;
-        if report_null(b, node, i + 1, "after") {
-            got_nulls.push(i + 1);
+        let eff_str = fmt_effects(b, node);
+        eprintln!("  [{}] after pos={} effects={}", dir, i + 1, eff_str);
+        if let Some(exp) = expected_effects.get(i) {
+            if exp != "?" {
+                assert_eq!(eff_str, *exp,
+                    "effects mismatch: name={} dir={} step={} byte='{}'",
+                    name, dir, i, *byte as char);
+            }
+        }
+        {
+            let nulls_id = b.get_nulls_id(node);
+            for e in b.nulls_entry_vec(nulls_id.0) { got_nulls.push((i + 1) + e.rel as usize); }
         }
     }
     if let Some(exp) = expected_nulls {
@@ -95,9 +105,14 @@ fn test_deriv_toml() {
             continue;
         }
         let mut b = RegexBuilder::new();
-        let node = resharp_parser::parse_ast(&mut b, &tc.pattern).unwrap();
+        let node = if tc.ascii {
+            let flags = resharp_parser::PatternFlags { unicode: false, full_unicode: false, ascii_perl_classes: true, ..Default::default() };
+            resharp_parser::parse_ast_with(&mut b, &tc.pattern, &flags).unwrap()
+        } else {
+            resharp_parser::parse_ast(&mut b, &tc.pattern).unwrap()
+        };
 
-        if !tc.rev.is_empty() || tc.rev_nulls.is_some() {
+        if !tc.rev.is_empty() || tc.rev_nulls.is_some() || !tc.rev_effects.is_empty() {
             let rev = b.reverse(node).unwrap();
             let rev = b.normalize_rev(rev).unwrap();
             let rev = b.mk_concat(NodeId::TS, rev);
@@ -115,12 +130,13 @@ fn test_deriv_toml() {
                 &bytes,
                 &tc.rev,
                 tc.rev_nulls.as_deref(),
+                &tc.rev_effects,
                 "rev",
                 &tc.name,
             );
         }
 
-        if !tc.fwd.is_empty() || tc.fwd_nulls.is_some() {
+        if !tc.fwd.is_empty() || tc.fwd_nulls.is_some() || !tc.fwd_effects.is_empty() {
             eprintln!(
                 "\n[{}] fwd initial: node={:?} kind={:?} pp={}",
                 tc.name,
@@ -135,6 +151,7 @@ fn test_deriv_toml() {
                 &bytes,
                 &tc.fwd,
                 tc.fwd_nulls.as_deref(),
+                &tc.fwd_effects,
                 "fwd",
                 &tc.name,
             );

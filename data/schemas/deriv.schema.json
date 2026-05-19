@@ -29,7 +29,18 @@
         "pattern"
       ],
       "properties": {
+        "ascii": {
+          "default": false,
+          "type": "boolean"
+        },
         "fwd": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "fwd_effects": {
           "default": [],
           "type": "array",
           "items": {
@@ -62,6 +73,13 @@
           "type": "string"
         },
         "rev": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rev_effects": {
           "default": [],
           "type": "array",
           "items": {

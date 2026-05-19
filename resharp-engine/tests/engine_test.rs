@@ -1528,9 +1528,8 @@ mod prefix_toml {
             if tc.ignore {
                 continue;
             }
-            let needs_sets = tc.prefix_rev.is_some()
-                || tc.potential_rev.is_some()
-                || tc.potential_fwd.is_some();
+            let needs_sets =
+                tc.prefix_rev.is_some() || tc.potential_rev.is_some() || tc.potential_fwd.is_some();
             let sets_pair = needs_sets.then(|| make_prefix_sets(&tc.pattern));
             let check = |kind: &str, expected: &str| {
                 let result = match kind {
@@ -1555,10 +1554,18 @@ mod prefix_toml {
                     tc.name, kind
                 );
             };
-            if let Some(e) = &tc.kind { check("kind", e); }
-            if let Some(e) = &tc.prefix_rev { check("prefix_rev", e); }
-            if let Some(e) = &tc.potential_rev { check("potential_rev", e); }
-            if let Some(e) = &tc.potential_fwd { check("potential_fwd", e); }
+            if let Some(e) = &tc.kind {
+                check("kind", e);
+            }
+            if let Some(e) = &tc.prefix_rev {
+                check("prefix_rev", e);
+            }
+            if let Some(e) = &tc.potential_rev {
+                check("potential_rev", e);
+            }
+            if let Some(e) = &tc.potential_fwd {
+                check("potential_fwd", e);
+            }
         }
     }
 }
@@ -1671,7 +1678,6 @@ mod hardened_regressions {
     }
 }
 
-
 #[test]
 fn anchored_rev_intersection_complement_missed_by_find_all() {
     use resharp::Regex;
@@ -1720,9 +1726,62 @@ fn word_boundary_between_word_chars_should_not_match() {
         let r = Regex::new(pat).unwrap();
         let all = r.find_all(hay).unwrap();
         let spans: Vec<_> = all.iter().map(|m| (m.start, m.end)).collect();
-        eprintln!("pat={pat} hay={:?} -> {:?}", std::str::from_utf8(hay).unwrap(), spans);
-        assert_eq!(&spans[..], *expected, "pat={pat} hay={:?}", std::str::from_utf8(hay).unwrap());
+        eprintln!(
+            "pat={pat} hay={:?} -> {:?}",
+            std::str::from_utf8(hay).unwrap(),
+            spans
+        );
+        assert_eq!(
+            &spans[..],
+            *expected,
+            "pat={pat} hay={:?}",
+            std::str::from_utf8(hay).unwrap()
+        );
     }
 }
 
+#[test]
+fn leading_union_lb_in_concat() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let ascii = |pat| Regex::with_options(pat, RegexOptions::default().unicode(UnicodeMode::Ascii));
+
+    let re = ascii(r"(^|[^-\s])--([^-\s]|$)").unwrap();
+    let input = b"foo--bar and --bad and good--\nok";
+    let ms = re.find_all(input).unwrap();
+    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
+    assert_eq!(actual, &[[2, 6], [26, 29]]);
+
+    let re2 = Regex::new(r"(^|[^-\s])--([^-\s]|$)").unwrap();
+    let ms2 = re2.find_all(input).unwrap();
+    let actual2: Vec<[usize; 2]> = ms2.iter().map(|m| [m.start, m.end]).collect();
+    assert_eq!(actual2, &[[2, 6], [26, 29]]);
+}
+
+#[test]
+fn js_numeric_literals() {
+    let bin = resharp::Regex::new(r"0b[01]+(?:\_[01]+)*\b").unwrap();
+    let oct = resharp::Regex::new(r"0o[0-7]+(?:\_[0-7]+)*\b").unwrap();
+    let hex = resharp::Regex::new(r"(?i)0x[0-9a-f]+(?:\_[0-9a-f]+)*\b").unwrap();
+
+    let matches = |re: &resharp::Regex, input: &[u8]| -> Vec<String> {
+        re.find_all(input)
+            .unwrap()
+            .iter()
+            .map(|m| String::from_utf8(input[m.start..m.end].to_vec()).unwrap())
+            .collect()
+    };
+
+    assert_eq!(
+        matches(&bin, b"0b1010 0b10_01 0b2 x0b10"),
+        &["0b1010", "0b10_01", "0b10"]
+    );
+    assert_eq!(
+        matches(&oct, b"0o777 0o7_7 0o8 x0o77"),
+        &["0o777", "0o7_7", "0o77"]
+    );
+    assert_eq!(
+        matches(&hex, b"0xFF 0xDEAD_BEEF 0xGG x0xFF"),
+        &["0xFF", "0xDEAD_BEEF", "0xFF"]
+    );
+}
 

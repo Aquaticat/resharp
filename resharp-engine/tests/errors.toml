@@ -82,12 +82,6 @@ expect_error = true
 reason = "SwapGreed flag in group unsupported"
 
 [[test]]
-name = "word_boundary_scientific_notation"
-pattern = '\b-?[1-9](?:\.\d+)?[Ee][-+]?\d+\b'
-expect_error = true
-reason = "word boundary in scientific notation - unsupported shape"
-
-[[test]]
 name = "neg_la_dot_star_neg_lb_min"
 pattern = 'a(?!b).*(?<!a)b'
 expect_error = true

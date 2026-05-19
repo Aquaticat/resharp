@@ -133,4 +133,10 @@ pub struct DerivCase {
     pub fwd: Vec<String>,
     pub rev_nulls: Option<Vec<usize>>,
     pub fwd_nulls: Option<Vec<usize>>,
+    #[serde(default)]
+    pub rev_effects: Vec<String>,
+    #[serde(default)]
+    pub fwd_effects: Vec<String>,
+    #[serde(default)]
+    pub ascii: bool,
 }

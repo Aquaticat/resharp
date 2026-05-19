@@ -980,6 +980,11 @@ impl RegexBuilder {
             .has(MetaFlags::CONTAINS_LOOKBEHIND.or(MetaFlags::CONTAINS_LOOKAHEAD))
     }
 
+    pub fn contains_lookbehind(&mut self, node_id: NodeId) -> bool {
+        self.get_meta_flags(node_id)
+            .has(MetaFlags::CONTAINS_LOOKBEHIND)
+    }
+
     pub fn contains_anchors(&self, node_id: NodeId) -> bool {
         self.get_meta_flags(node_id)
             .has(MetaFlags::CONTAINS_ANCHORS)
@@ -1112,7 +1117,7 @@ impl RegexBuilder {
             Kind::Lookahead | Kind::Lookbehind => {
                 let prev = node_id.right(self).missing_to_eps();
                 self.get_fixed_length(prev)
-            },
+            }
             Kind::Counted => self.get_fixed_length(node_id.left(self)),
             Kind::Star | Kind::Compl => None,
         }
@@ -1997,38 +2002,43 @@ impl RegexBuilder {
         if node_id.is_concat(self) && node_id.left(self) == NodeId::BEGIN {
             return self.strip_lb(node_id.right(self));
         }
-        self.strip_lb_inner(node_id)
+        let result = self.strip_lb_inner(true, node_id)?;
+        debug_assert!(
+            !self.contains_lookbehind(result),
+            "should not contain lookbehind: {:?}",
+            self.pp(result)
+        );
+        Ok(result)
     }
 
-    fn strip_lb_inner(&mut self, node_id: NodeId) -> Result<NodeId, ResharpError> {
-        if !self.contains_look(node_id) {
+    fn strip_lb_inner(&mut self, allowed: bool, node_id: NodeId) -> Result<NodeId, ResharpError> {
+        if !self.contains_lookbehind(node_id) {
             return Ok(node_id);
         }
-        if node_id.is_concat(self) && node_id.left(self).is_lookbehind(self) {
-            let lb = node_id.left(self);
-            let prev = self.get_lookbehind_prev(lb);
-            let tail = self.strip_lb_inner(node_id.right(self))?;
-            if prev != NodeId::MISSING {
-                let stripped_prev = self.strip_lb_inner(prev)?;
-                return Ok(self.mk_concat(stripped_prev, tail));
-            }
-            return Ok(tail);
+        if !allowed {
+            return Result::Err(ResharpError::UnsupportedPattern);
         }
         if node_id.is_inter(self) {
-            let left = self.strip_lb_inner(node_id.left(self))?;
-            let right = self.strip_lb_inner(node_id.right(self))?;
+            let left = self.strip_lb_inner(allowed, node_id.left(self))?;
+            let right = self.strip_lb_inner(allowed, node_id.right(self))?;
             return Ok(self.mk_inter(left, right));
         }
-        if self.get_kind(node_id) == Kind::Union {
-            let left = self.strip_lb_inner(node_id.left(self))?;
-            let right = self.strip_lb_inner(node_id.right(self))?;
+        if node_id.is_union(self) {
+            let left = self.strip_lb_inner(allowed, node_id.left(self))?;
+            let right = self.strip_lb_inner(allowed, node_id.right(self))?;
             return Ok(self.mk_union(left, right));
         }
         match self.get_kind(node_id) {
+            Kind::Compl => Result::Err(ResharpError::UnsupportedPattern),
+            Kind::Concat => {
+                let left = self.strip_lb_inner(allowed, node_id.left(self))?;
+                let right = self.strip_lb_inner(allowed, node_id.right(self))?;
+                Ok(self.mk_concat(left, right))
+            }
             Kind::Lookbehind => {
                 let prev = self.get_lookbehind_prev(node_id);
                 if prev != NodeId::MISSING {
-                    self.strip_lb_inner(prev)
+                    self.strip_lb_inner(allowed, prev)
                 } else {
                     Ok(NodeId::EPS)
                 }
@@ -2568,11 +2578,14 @@ impl RegexBuilder {
             return Some(rewrite);
         }
 
-        if left == NodeId::EPS
-            && self.get_extra(left) == 0
-            && self.nullability(right) == Nullability::ALWAYS
-        {
-            return Some(right);
+        if left == NodeId::EPS && self.nullability(right) == Nullability::ALWAYS {
+            let right_nulls_id = self.get_nulls_id(right);
+            if self.mb.nb.array[right_nulls_id.0 as usize]
+                .iter()
+                .any(|n| n.rel == 0 && n.mask.has(Nullability::ALWAYS))
+            {
+                return Some(right);
+            }
         }
 
         if left.is_lookahead(self) && right.is_lookahead(self) {
@@ -3074,7 +3087,11 @@ impl RegexBuilder {
             return Ok(NodeId::BOT);
         }
         if lb_body == NodeId::TS {
-            return Ok(if lb_prev == NodeId::MISSING { NodeId::EPS } else { lb_prev });
+            return Ok(if lb_prev == NodeId::MISSING {
+                NodeId::EPS
+            } else {
+                lb_prev
+            });
         }
         if lb_body == NodeId::EPS {
             match lb_prev {
@@ -3317,7 +3334,6 @@ impl RegexBuilder {
                 let psi = body.pred_tset(self);
                 let negated = self.mk_pred_not(psi);
                 let union = self.mk_union(NodeId::BEGIN, negated);
-                // lb_prev is MISSING - cannot trigger UnsupportedPattern
                 self.mk_lookbehind_internal(union, NodeId::MISSING).unwrap()
             }
             _ => {
@@ -3327,7 +3343,6 @@ impl RegexBuilder {
                 let neg = self.mk_compl(body);
                 let negated = self.mk_inter(neg, uc);
                 let union = self.mk_union(NodeId::BEGIN, negated);
-                // lb_prev is MISSING - cannot trigger UnsupportedPattern
                 self.mk_lookbehind_internal(union, NodeId::MISSING).unwrap()
             }
         }

@@ -211,6 +211,7 @@ pub struct LDFA {
     pub max_capacity: usize,
     pub is_forward: bool,
     pub has_anchors: bool,
+    pub initial_nullability: Nullability,
 }
 
 impl LDFA {
@@ -328,6 +329,7 @@ impl LDFA {
             max_capacity,
             is_forward,
             has_anchors: b.contains_anchors(initial),
+            initial_nullability: b.nullability(initial),
         })
     }
 
@@ -792,26 +794,23 @@ impl LDFA {
         pos_begin: usize,
         data: &[u8],
     ) -> Result<usize, Error> {
-        let empty_mask = if pos_begin == 0 {
+        let mut max_end: usize = if self.initial_nullability.has(if pos_begin == 0 {
             Nullability::BEGIN
         } else {
             Nullability::CENTER
+        }) {
+            pos_begin
+        } else {
+            NO_MATCH
         };
-        let has_empty = has_any_null(
-            &self.effects_id,
-            &self.effects,
-            DFA_INITIAL as u32,
-            empty_mask,
-        );
 
         let mt = self.mt_lookup[data[pos_begin] as usize];
         let mut curr = self.begin_table[mt as usize] as u32;
         if curr <= DFA_DEAD as u32 {
-            return Ok(if has_empty { pos_begin } else { NO_MATCH });
+            return Ok(max_end);
         }
         let end = data.len();
         let mut pos = pos_begin + 1;
-        let mut max_end: usize = NO_MATCH;
 
         let mask = if pos == end {
             Nullability::END
@@ -828,7 +827,7 @@ impl LDFA {
         );
 
         if pos == end {
-            return Ok(self.resolve_max_end(max_end, has_empty, pos_begin));
+            return Ok(max_end);
         }
 
         loop {
@@ -852,15 +851,6 @@ impl LDFA {
             }
 
             self.create_state(b, curr as u16)?;
-            if cfg!(feature = "debug") {
-                eprintln!(
-                    "  [fwd-miss] sid={} curr={} skip_ids=[{},{}]",
-                    sid,
-                    curr,
-                    self.skip_ids.get(sid as usize).copied().unwrap_or(255),
-                    self.skip_ids.get(curr as usize).copied().unwrap_or(255)
-                );
-            }
 
             let mask = if pos == end {
                 Nullability::END
@@ -881,18 +871,7 @@ impl LDFA {
             }
         }
 
-        Ok(self.resolve_max_end(max_end, has_empty, pos_begin))
-    }
-
-    #[inline]
-    fn resolve_max_end(&self, max_end: usize, has_empty: bool, pos_begin: usize) -> usize {
-        if max_end != NO_MATCH {
-            max_end
-        } else if has_empty {
-            pos_begin
-        } else {
-            NO_MATCH
-        }
+        Ok(max_end)
     }
 
     #[inline(never)]
@@ -909,23 +888,19 @@ impl LDFA {
         let data_end = data.len();
 
         let mut next_start = 0usize;
-        let use_skip = self.can_skip();
-        if cfg!(feature = "debug") {
-            eprintln!(
-                "  [scan_fwd_all] can_skip={} searchers={} nulls={}",
-                use_skip,
-                self.skip_searchers.len(),
-                nulls.len()
-            );
-        }
 
         let mut l_pos: usize;
         let mut i = nulls.len();
 
         if nulls[nulls.len() - 1] == 0 {
+            // println!("{:?}","pos:0");
             i = i - 1;
             l_pos = 0;
-            let mut l_max_end = NO_MATCH;
+            let mut l_max_end: usize = if self.initial_nullability.has(Nullability::BEGIN) {
+                0
+            } else {
+                NO_MATCH
+            };
 
             // manually take first step
             let mt = self.mt_lookup[data[l_pos] as usize] as u32;
@@ -1127,15 +1102,7 @@ impl LDFA {
                 end,
             )
         } else {
-            scan_fwd_first_null::<false>(
-                tables,
-                self.effects_id.as_ptr(),
-                &[],
-                &[],
-                curr,
-                pos,
-                end,
-            )
+            scan_fwd_first_null::<false>(tables, self.effects_id.as_ptr(), &[], &[], curr, pos, end)
         }
     }
 
@@ -1327,20 +1294,7 @@ impl LDFA {
         data: &[u8],
         nulls: &mut Vec<usize>,
     ) -> Result<(), Error> {
-        #[cfg(feature = "debug")]
-        {
-            // eprintln!("  [rev0]: {}", b.pp(self.state_nodes[DFA_INITIAL as usize]));
-            eprintln!(
-                "  [rev0]: {:.20}",
-                b.pp(self.state_nodes[DFA_INITIAL as usize])
-            );
-        }
-
         let mut curr = self.begin_table[self.mt_lookup[data[start_pos] as usize] as usize] as u32;
-        #[cfg(feature = "debug")]
-        {
-            eprintln!("rev1: {:.30}", b.pp(self.state_nodes[curr as usize]));
-        }
         if data.len() == 1 {
             return self.len_1_rev(curr, nulls);
         }
@@ -1386,13 +1340,6 @@ impl LDFA {
             }
 
             if !cache_miss {
-                if cfg!(feature = "debug") {
-                    eprintln!(
-                        "  [collect_rev] no cache miss, state={} pos={}",
-                        state, new_pos
-                    );
-                }
-
                 self.handle_rev_end(b, state as u16, data, nulls)?;
                 break;
             }
@@ -1414,15 +1361,6 @@ impl LDFA {
             } else {
                 Nullability::CENTER
             };
-            if cfg!(feature = "debug") {
-                if self.effects_id[curr as usize] > 0 {
-                    eprintln!(
-                        "  [effect] pos={} eid=1 push={:.20}",
-                        pos,
-                        b.pp(self.state_nodes[curr as usize])
-                    );
-                }
-            }
             collect_nulls(&self.effects_id, &self.effects, curr, pos, mask, nulls);
             if EARLY_EXIT && !nulls.is_empty() {
                 return Ok(());
@@ -1481,6 +1419,7 @@ impl LDFA {
         Ok(())
     }
 
+    #[cfg_attr(not(feature = "debug"), allow(unused_variables))]
     fn handle_rev_end(
         &mut self,
         b: &mut RegexBuilder,
@@ -1536,23 +1475,11 @@ fn collect_nulls(
         match eid {
             EID_ALWAYS0 => {
                 if mask.has(Nullability::ALWAYS) {
-                    if cfg!(feature = "debug") {
-                        eprintln!(
-                            "  [collect_nulls] state={} pos={} eid=1 push={}",
-                            state, pos, pos
-                        );
-                    }
                     nulls.push(pos);
                 }
             }
             EID_CENTER0 => {
                 if mask.has(Nullability::CENTER) {
-                    if cfg!(feature = "debug") {
-                        eprintln!(
-                            "  [collect_nulls] state={} pos={} eid=2 push={}",
-                            state, pos, pos
-                        );
-                    }
                     nulls.push(pos);
                 }
             }
@@ -1569,16 +1496,6 @@ fn collect_nulls(
             _ => {
                 for n in &effects[eid as usize] {
                     if n.mask.has(mask) {
-                        if cfg!(feature = "debug") {
-                            eprintln!(
-                                "  [collect_nulls] state={} pos={} eid={} rel={} push={}",
-                                state,
-                                pos,
-                                eid,
-                                n.rel,
-                                pos + n.rel as usize
-                            );
-                        }
                         nulls.push(pos + n.rel as usize);
                     }
                 }
@@ -1649,7 +1566,11 @@ fn collect_max<const REV: bool>(
             if REV {
                 *best = (*best).min(pos);
             } else {
-                *best = if *best == NO_MATCH { pos } else { (*best).max(pos) };
+                *best = if *best == NO_MATCH {
+                    pos
+                } else {
+                    (*best).max(pos)
+                };
             }
         }
         return;
@@ -1660,7 +1581,11 @@ fn collect_max<const REV: bool>(
             *best = (*best).min(pos + n.rel as usize);
         } else {
             let cand = pos - n.rel as usize;
-            *best = if *best == NO_MATCH { cand } else { (*best).max(cand) };
+            *best = if *best == NO_MATCH {
+                cand
+            } else {
+                (*best).max(cand)
+            };
         }
     }
 }
@@ -1816,7 +1741,11 @@ unsafe fn fwd_update<const IS_END: bool>(
         return max_end;
     }
     if eid == EID_CENTER0 as u16 {
-        return if max_end == NO_MATCH { pos } else { max_end.max(pos) };
+        return if max_end == NO_MATCH {
+            pos
+        } else {
+            max_end.max(pos)
+        };
     }
     let v = unsafe { &*effects.add(eid as usize) };
     debug_assert!(v.windows(2).all(|w| w[0].rel >= w[1].rel));
@@ -1828,7 +1757,11 @@ unsafe fn fwd_update<const IS_END: bool>(
     match pick {
         Some(n) => {
             let cand = pos - n.rel as usize;
-            if max_end == NO_MATCH { cand } else { max_end.max(cand) }
+            if max_end == NO_MATCH {
+                cand
+            } else {
+                max_end.max(cand)
+            }
         }
         None => max_end,
     }

@@ -225,7 +225,3 @@ pattern = '\\(\d{1,3}|x[a-fA-F0-9]+|u[a-fA-F0-9]{1,4}|.|\n)'
 input = "xxxxx\\!yyyyy"
 matches = [[5, 7]]
 
-
-
-
-

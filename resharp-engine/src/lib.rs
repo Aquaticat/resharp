@@ -611,6 +611,38 @@ fn collect_union_branches(b: &RegexBuilder, node: NodeId, out: &mut Vec<NodeId>)
     }
 }
 
+fn first_lb_in_branch(b: &RegexBuilder, node: NodeId) -> Option<NodeId> {
+    if b.get_kind(node) == Kind::Lookbehind {
+        return Some(node);
+    }
+    if b.get_kind(node) == Kind::Concat {
+        return first_lb_in_branch(b, node.left(b));
+    }
+    None
+}
+
+fn lb_char_tset(b: &mut RegexBuilder, lb_node: NodeId) -> Option<TSetId> {
+    let lb_body = b.get_lookbehind_inner(lb_node);
+    if b.get_kind(lb_body) == Kind::Concat {
+        let right = lb_body.right(b);
+        if b.get_kind(right) == Kind::Pred {
+            return Some(right.pred_tset(b));
+        }
+    }
+    if b.get_kind(lb_body) == Kind::Union {
+        let lft = lb_body.left(b);
+        let rgt = lb_body.right(b);
+        if lft == NodeId::BEGIN && b.get_kind(rgt) == Kind::Compl {
+            let inner = rgt.left(b);
+            if b.get_kind(inner) == Kind::Pred {
+                let tset = inner.pred_tset(b);
+                return Some(b.solver().not_id(tset));
+            }
+        }
+    }
+    None
+}
+
 /// heuristic checks if we can support an union with lookbehinds,
 /// we wont determine which one matched so we require them to be disjoint
 fn union_branches_distinguishable(b: &mut RegexBuilder, union_node: NodeId) -> bool {
@@ -623,9 +655,10 @@ fn union_branches_distinguishable(b: &mut RegexBuilder, union_node: NodeId) -> b
     if b.get_fixed_length(union_node).is_some() {
         return true;
     }
-    let mut firsts: Vec<(bool, TSetId)> = Vec::with_capacity(branches.len());
+    let mut firsts: Vec<(bool, TSetId, Option<NodeId>)> = Vec::with_capacity(branches.len());
     for &br in &branches {
         let has_lb = br.contains_lookbehind(b);
+        let lb_node = if has_lb { first_lb_in_branch(b, br) } else { None };
         let stripped = match b.strip_lb(br) {
             Ok(s) => s,
             Err(_) => return false,
@@ -636,9 +669,9 @@ fn union_branches_distinguishable(b: &mut RegexBuilder, union_node: NodeId) -> b
         };
         let first = match sets.first() {
             Some(&s) => s,
-            None => return false,
+            None => continue,
         };
-        firsts.push((has_lb, first));
+        firsts.push((has_lb, first, lb_node));
     }
     for i in 0..firsts.len() {
         if !firsts[i].0 {
@@ -649,7 +682,16 @@ fn union_branches_distinguishable(b: &mut RegexBuilder, union_node: NodeId) -> b
                 continue;
             }
             let inter = b.solver().and_id(firsts[i].1, firsts[j].1);
-            if inter != TSetId::EMPTY {
+            if inter == TSetId::EMPTY {
+                continue;
+            }
+            let tset_i = firsts[i].2.and_then(|n| lb_char_tset(b, n));
+            let tset_j = firsts[j].2.and_then(|n| lb_char_tset(b, n));
+            let lb_disjoint = match (tset_i, tset_j) {
+                (Some(ti), Some(tj)) => b.solver().and_id(ti, tj) == TSetId::EMPTY,
+                _ => false,
+            };
+            if !lb_disjoint {
                 return false;
             }
         }
@@ -679,9 +721,29 @@ fn ensure_supported_rec(
                 Err(resharp_algebra::ResharpError::UnsupportedPattern)
             }
         }
-        Kind::Concat | Kind::Inter => {
+        Kind::Inter => {
             ensure_supported_rec(b, node.left(b), false)?;
             ensure_supported_rec(b, node.right(b), false)
+        }
+        Kind::Concat => {
+            let left = node.left(b);
+            let right = node.right(b);
+            if b.get_kind(left) == Kind::Union && left.contains_lookbehind(b) {
+                let mut branches = Vec::new();
+                collect_union_branches(b, left, &mut branches);
+                let mut distributed = b.mk_concat(branches[0], right);
+                for &br in &branches[1..] {
+                    let arm = b.mk_concat(br, right);
+                    distributed = b.mk_union(distributed, arm);
+                }
+                if union_branches_distinguishable(b, distributed) {
+                    return ensure_supported_rec(b, right, false);
+                } else {
+                    return Err(resharp_algebra::ResharpError::UnsupportedPattern);
+                }
+            }
+            ensure_supported_rec(b, left, false)?;
+            ensure_supported_rec(b, right, false)
         }
         Kind::Star => {
             if node.left(b).contains_lookaround(b) {
@@ -806,11 +868,6 @@ impl Regex {
         let fwd_begin_anchored = node == NodeId::BEGIN
             || (b.get_kind(node) == resharp_algebra::Kind::Concat
                 && node.left(&b) == NodeId::BEGIN);
-        #[cfg(feature = "debug")]
-        eprintln!(
-            "  [rev] ts_rev_start_after_simplify: {:.50}",
-            b.pp(ts_rev_start)
-        );
         let rev_trivial = b.nullability(ts_rev_start) == Nullability::ALWAYS;
         let fixed_length = b.get_fixed_length(node);
         let (min_len, max_len) = b.get_min_max_length(node);
@@ -921,13 +978,6 @@ impl Regex {
         } else {
             false
         };
-
-        if cfg!(feature = "debug") {
-            eprintln!("  [fwd] {:.50}", b.pp(fwd_start));
-            eprintln!("  [rev] {:.50}", b.pp(ts_rev_start));
-            eprintln!("  [hardened] {:.50}", hardened);
-            eprintln!("  [pre] {:.50}", 1);
-        }
 
         let fas = if hardened {
             // operate on fwd_start: the fwd DFA never sees the leading lookbehind
@@ -1086,7 +1136,7 @@ impl Regex {
         // if self.trailing_star_anchored_left && !has_fwd_prefix {
         //     return self.find_all_trailing_star(input);
         // }
-       
+
         #[cfg(all(feature = "debug", debug_assertions))]
         {
             let pre_kind = match &self.prefix {
@@ -1101,6 +1151,7 @@ impl Regex {
                 pre_kind, self.has_bounded, self.fwd_end_nullable
             );
         }
+       
         match &self.prefix {
             Some(prefix::PrefixKind::AnchoredFwd(_)) => {
                 return self.find_all_fwd_prefix(input);
@@ -1439,11 +1490,6 @@ impl Regex {
         inner
             .rev_ts
             .collect_rev(&mut inner.b, input.len() - 1, input, &mut inner.nulls)?;
-
-        #[cfg(feature = "debug")]
-        {
-            eprintln!("nulls_after_rev={}", &inner.nulls.len());
-        }
 
         if self.hardened {
             let RegexInner {
