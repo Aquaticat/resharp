@@ -12,6 +12,31 @@ fn load_tests(filename: &str) -> Vec<EngineCase> {
     file.test
 }
 
+fn run_is_match_file(filename: &str) {
+    let tests = load_tests(filename);
+    for tc in &tests {
+        if tc.ignore {
+            continue;
+        }
+        let re = Regex::new(&tc.pattern).unwrap_or_else(|e| {
+            panic!(
+                "file={}, name={:?}, pattern={:?}: compile error: {}",
+                filename, tc.name, tc.pattern, e
+            )
+        });
+        let found = re.is_match(tc.input.as_bytes()).unwrap();
+        assert_eq!(
+            found,
+            !tc.matches.is_empty(),
+            "file={}, name={:?}, pattern={:?}, input={:?}",
+            filename,
+            tc.name,
+            tc.pattern,
+            tc.input
+        );
+    }
+}
+
 fn run_file(filename: &str) {
     let tests = load_tests(filename);
     for tc in &tests {
@@ -79,6 +104,11 @@ fn normal_basic() {
 #[test]
 fn normal_anchors() {
     run_file("anchors.toml");
+}
+
+#[test]
+fn is_match() {
+    run_is_match_file("is_match.toml");
 }
 
 #[test]
@@ -1780,8 +1810,9 @@ fn js_numeric_literals() {
         &["0o777", "0o7_7", "0o77"]
     );
     assert_eq!(
-        matches(&hex, b"0xFF 0xDEAD_BEEF 0xGG x0xFF"),
-        &["0xFF", "0xDEAD_BEEF", "0xFF"]
+        matches(&hex, b"0xff 0xA_B 0xg x0x1"),
+        &["0xff", "0xA_B", "0x1"]
     );
 }
+
 

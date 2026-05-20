@@ -5,7 +5,7 @@ use resharp_algebra::solver::{Solver, TSetId};
 use resharp_algebra::{Kind, NodeId, RegexBuilder};
 
 use crate::engine::{collect_sets, transition_term, PartitionTree};
-use crate::{Error, Match};
+use crate::{Error, Match, Regex};
 
 const RARE_BYTE_FREQ_LIMIT: u16 = 25_000;
 
@@ -653,4 +653,52 @@ pub(crate) fn bdfa_scan<const PREFIX: u8, const ISMATCH: bool>(
     }
 
     Ok(false)
+}
+
+impl Regex {
+    pub(crate) fn find_all_fwd_bounded(&self, input: &[u8]) -> Result<Vec<Match>, Error> {
+        let crate::RegexInner {
+            b,
+            bounded,
+            matches: matches_buf,
+            ..
+        } = &mut *self.inner.lock().unwrap();
+        let bounded = bounded.as_mut().unwrap();
+        matches_buf.clear();
+        match &bounded.prefix {
+            Some(p) if p.is_literal() => {
+                bdfa_scan::<{ Prefix::Literal as u8 }, false>(bounded, b, input, matches_buf)?;
+            }
+            Some(_) => {
+                bdfa_scan::<{ Prefix::Search as u8 }, false>(bounded, b, input, matches_buf)?;
+            }
+            None => {
+                bdfa_scan::<{ Prefix::None as u8 }, false>(bounded, b, input, matches_buf)?;
+            }
+        }
+        Ok(matches_buf.clone())
+    }
+
+    pub(crate) fn is_match_fwd_bounded(&self, input: &[u8]) -> Result<bool, Error> {
+        let crate::RegexInner {
+            b,
+            bounded,
+            matches: matches_buf,
+            ..
+        } = &mut *self.inner.lock().unwrap();
+        let bounded = bounded.as_mut().unwrap();
+        matches_buf.clear();
+        let found = match &bounded.prefix {
+            Some(p) if p.is_literal() => {
+                bdfa_scan::<{ Prefix::Literal as u8 }, true>(bounded, b, input, matches_buf)?
+            }
+            Some(_) => {
+                bdfa_scan::<{ Prefix::Search as u8 }, true>(bounded, b, input, matches_buf)?
+            }
+            None => {
+                bdfa_scan::<{ Prefix::None as u8 }, true>(bounded, b, input, matches_buf)?
+            }
+        };
+        Ok(found)
+    }
 }
