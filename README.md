@@ -3,9 +3,7 @@
 [![crates.io](https://img.shields.io/crates/v/resharp.svg)](https://crates.io/crates/resharp)
 [![docs.rs](https://docs.rs/resharp/badge.svg)](https://docs.rs/resharp)
 
-A high-performance, automata-based regex engine with first-class support for **intersection** and **complement** operations. RE#'s main strength is complex patterns (large lists of alternatives, lookarounds, and boolean combinations) where traditional engines degrade or fall back to slower paths.
-
-RE# compiles patterns into deterministic automata. All matching is non-backtracking with guaranteed linear-time execution. RE# extends standard regex syntax with intersection (`&`), complement (`~`), and a universal wildcard (`_`), enabling patterns that are impossible or impractical to express with standard regex.
+A high-performance, automata-based regex engine with first-class support for **intersection** (`&`), **complement** (`~`), and an any-byte wildcard (`_`). Non-backtracking, linear-time. Shines on complex patterns (large alternations, lookarounds, boolean combinations) where traditional engines degrade or fall back to slower paths.
 
 [paper](https://dl.acm.org/doi/10.1145/3704837) | [blog post](https://iev.ee/blog/symbolic-derivatives-and-the-rust-rewrite-of-resharp/) | [syntax docs](https://github.com/ieviev/resharp/blob/main/docs/syntax.md) | [dotnet version](https://github.com/ieviev/resharp-dotnet) and [web playground](https://ieviev.github.io/resharp-webapp/)
 
@@ -16,10 +14,11 @@ cargo add resharp
 ```
 
 ```rust
-let re = resharp::Regex::new(r".*cat.*&.*dog.*&.{8,15}").unwrap();
+// 8+ alphanumeric & contains digit & contains uppercase
+let re = resharp::Regex::new(r"[A-Za-z0-9]{8,}&_*[0-9]_*&_*[A-Z]_*").unwrap();
 
-let matches = re.find_all(b"the cat and the dog").unwrap();
-let found = re.is_match(b"the cat and the dog").unwrap();
+let found = re.is_match(b"Hunter2024").unwrap();
+let matches = re.find_all(b"try Hunter2024 or password1").unwrap();
 ```
 
 ## When to use RE# over [`regex`](https://crates.io/crates/regex)
@@ -48,16 +47,13 @@ _*a_*             any string that contains 'a'
 
 You combine all of these with `&` to get more complex patterns. RE# also supports lookarounds (`(?=...)`, `(?<=...)`, `(?!...)`, `(?<!...)`), compiled directly into the automaton with no backtracking.
 
-RE# is not compatible with some `regex` crate features, eg. lazy quantifiers (`.*?`). See the full [syntax reference](docs/syntax.md) for details.
+## Differences from PCRE / `regex`
 
-## Match semantics
+- **Leftmost-longest, not leftmost-greedy.** `y|yes` on `"yes"` matches `yes`. Branch order is irrelevant.
+- **Multiline on by default.** `^`/`$` match start/end of line; disable with `(?-m)`. `\A`/`\z` always anchor to input.
+- **`\w` defaults to 2-byte UTF-8.** See [UnicodeMode](docs/syntax.md#unicode).
 
-Two defaults differ from PCRE / the `regex` crate. Both can bite you on otherwise portable patterns:
-
-- **Leftmost-longest, not leftmost-greedy.** `y|yes|n|no` on `"yes please"` matches `yes` in RE#, `y` in PCRE / `regex`. Alternation order doesn't matter.
-- **Multiline is on by default.** `^` and `$` default to start/end of **line**. Disable with `(?-m)` or `RegexOptions::multi_line(false)` to make them start/end of input. Use `\A` and `\z` to anchor to start/end of input regardless of mode.
-
-Matching returns `Result<Vec<Match>, Error>`. Capacity or lookahead overflow will fail outright rather than silently degrade.
+Lazy quantifiers (`*?`, `+?`, ...) are parse errors; rewrite with complement when possible: `<div>.*?</div>` -> `<div>~(_*</div>_*)</div>`. See [syntax.md](docs/syntax.md) for the rest.
 
 ## Configuration
 
@@ -65,7 +61,7 @@ Matching returns `Result<Vec<Match>, Error>`. Capacity or lookahead overflow wil
 let opts = resharp::RegexOptions {
     max_dfa_capacity: 65535,    // max automata states (default: u16::MAX)
     lookahead_context_max: 800, // max lookahead context distance (default: 800)
-    hardened: false,            // ~10x slower on avg. but linear for **all matches**
+    hardened: false,            // linear find_all worst-case (~10x slower average)
     unicode: resharp::UnicodeMode::Default, // Ascii | Default | Full | Javascript
     ..Default::default()
 };
@@ -74,7 +70,7 @@ let re = resharp::Regex::with_options(r"pattern", opts).unwrap();
 
 ## Benchmarks
 
-Throughput comparison with `regex` and `fancy-regex`, compiled with `--release`. Compile time is excluded; only matching is measured. Uses SIMD intrinsics (AVX2, NEON) with possibly more backends in the near future. Run with `cargo bench -- 'readme/' --list`.
+Throughput comparison with `regex` and `fancy-regex`, compiled with `--release`. Compile time is excluded; only matching is measured. Uses SIMD intrinsics (AVX2, NEON, WASM). Run with `cargo bench -- 'readme/' --list`.
 
 ### AMD Ryzen 7 5800X (105W TDP)
 
@@ -108,7 +104,5 @@ Throughput comparison with `regex` and `fancy-regex`, compiled with `--release`.
 - **Dense matches (~2678 in 944KB)**: the other engines degrade sharply because they must construct more of the lazy state machine. RE# holds at 535 MiB/s vs 58 MiB/s for `regex` on x86.
 - **`(?i)` case-insensitive**: `regex` falls back to a slower engine and drops to 0.01 MiB/s. RE# folds case into the DFA and keeps full speed.
 - **Lookarounds**: RE# compiles them directly into the automaton. `regex` doesn't support them (except anchors); `fancy-regex` backtracks, which can be orders of magnitude slower.
-- **Match semantics differ**: `regex` is leftmost-greedy (PCRE), RE# is leftmost-longest, so results can differ on ambiguous patterns.
-- **Scan direction**: RE# runs right-to-left for `find_all`, `regex` runs left-to-right. This changes where acceleration applies.
 - See also the [rebar](https://github.com/ieviev/rebar) comparison: not apples-to-apples (different match semantics, short repeated inputs), but a useful ballpark.
 - Found a pattern where RE# is >5x slower than `regex` or `fancy-regex`? Please [open an issue](https://github.com/ieviev/resharp/issues).
