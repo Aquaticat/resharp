@@ -23,9 +23,15 @@ pub(crate) fn calc_prefix_sets_inner(
     let mut redundant = BTreeSet::new();
     redundant.insert(NodeId::BOT);
     redundant.insert(start);
+    let mut visited: BTreeSet<NodeId> = BTreeSet::new();
 
     loop {
         if !result.is_empty() && redundant.contains(&node) {
+            break;
+        }
+
+        if !result.is_empty() && !visited.insert(node) {
+            result.clear();
             break;
         }
 

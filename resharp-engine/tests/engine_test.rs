@@ -1826,4 +1826,82 @@ fn js_numeric_literals() {
     );
 }
 
+// TODO: reallow once guaranteed 2 be correct
 
+// #[test]
+// fn test_html_attr() {
+//     let pat = r#"\b[a-zA-Z-]+(="[^"]*"|='[^']*'|=[^\s>]*)?"#;
+//     let re = resharp::Regex::new(pat).unwrap();
+//     let input = b"<div class=\"foo\" id='bar' hidden data-x=baz>";
+//     let ms = re.find_all(input).unwrap();
+//     let actual: Vec<&str> = ms.iter().map(|m| std::str::from_utf8(&input[m.start..m.end]).unwrap()).collect();
+//     for s in &actual { println!("{:?}", s); }
+//     assert_eq!(actual, &["class=\"foo\"", "id='bar'", "hidden", "data-x=baz"]);
+// }
+
+// #[test]
+// fn test_html_attr_parts() {
+//     let ok = |pat: &str| resharp::Regex::new(pat).map(|_| true).unwrap_or_else(|e| { println!("FAIL {:?}: {}", pat, e); false });
+//     assert!(ok(r#"\b[a-zA-Z-]+"#));
+//     assert!(ok(r#"[^\s>]*"#));
+//     assert!(ok(r#"="[^"]*""#));
+//     assert!(ok(r#"='[^']*'"#));
+//     assert!(ok(r#"=[^\s>]*"#));
+//     assert!(ok(r#"("foo"|"bar")?"#));
+//     assert!(ok(r#"\b[a-zA-Z-]+(="[^"]*")?"#));
+//     assert!(ok(r#"\b[a-zA-Z-]+(="[^"]*"|='[^']*')?"#));
+//     assert!(ok(r#"\b[a-zA-Z-]+(="[^"]*"|='[^']*'|=[^\s>]*)?"#));
+// }
+
+// #[test]
+// fn test_word_boundary_group() {
+//     let ok = |pat: &str| resharp::Regex::new(pat).map(|_| true).unwrap_or_else(|e| { println!("FAIL {:?}: {}", pat, e); false });
+//     assert!(ok(r"(?:\A\w|[A-Z]|\b\w|\s+)"));
+// }
+
+// #[test]
+// fn test_mxbrowser_ua() {
+//     let re = resharp::Regex::new(r"(?i)\b(?:mxbrowser|mxios|myie2)/?([\-A-Za-z0-9_.]*)\b").unwrap();
+//     let input = b"Mozilla/5.0 MxBrowser/1.2.3 mxios/4.5 myie2/foo-bar";
+//     let ms = re.find_all(input).unwrap();
+//     let actual: Vec<&str> = ms.iter().map(|m| std::str::from_utf8(&input[m.start..m.end]).unwrap()).collect();
+//     for s in &actual { println!("{:?}", s); }
+//     assert_eq!(actual, &["MxBrowser/1.2.3", "mxios/4.5", "myie2/foo-bar"]);
+// }
+
+#[test]
+fn prefix_calc_terminates_on_complement_intersection_quantified() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let r = resharp::Regex::new(r"abc~(\w)&(?:aaa)*");
+        let _ = tx.send(r.is_ok());
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+        Ok(_) => {}
+        Err(_) => panic!("Regex::new hung on `abc~(\\w)&(?:aaa)*`"),
+    }
+}
+
+#[test]
+fn lookahead_rel_saturates_with_end_anchor_intersection() {
+    let _ = resharp::Regex::new(r"(?:\w|$)(?:(?![1g]\_X)& a)");
+}
+
+#[test]
+fn lookahead_rel_saturates_with_nested_quantified_lookahead() {
+    let _ = resharp::Regex::new(r"(?:(?!\?){1,2}){3}");
+    let _ = resharp::Regex::new(r"(?:(?!abc)){4,12}a");
+}
+
+#[test]
+fn strip_lb_rejects_lookbehind_in_intersection() {
+    match resharp::Regex::new("(?:(?=a)&(?<=_))") {
+        Ok(re) => {
+            let ms = re.find_all(b"________________________________________________________________").unwrap();
+            assert!(ms.is_empty(), "spurious matches: {:?}", ms);
+            let ms = re.find_all(&[b'a'; 128]).unwrap();
+            assert!(ms.is_empty(), "spurious matches on a's: {:?}", ms);
+        }
+        Err(_) => {}
+    }
+}

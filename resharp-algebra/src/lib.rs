@@ -32,7 +32,10 @@ impl std::fmt::Display for ResharpError {
             ResharpError::StateSpaceExplosion => {
                 write!(f, "too many states, likely infinite state space")
             }
-            ResharpError::UnsupportedPattern => write!(f, "unsupported lookaround pattern"),
+            ResharpError::UnsupportedPattern => write!(
+                f,
+                "unsupported lookaround pattern (lookaround, word boundary, or `^`/`$` anchor inside a complement `~(...)`, or a lookbehind operand of an intersection `&`)"
+            ),
         }
     }
 }
@@ -2004,11 +2007,9 @@ impl RegexBuilder {
             return self.strip_lb(node_id.right(self));
         }
         let result = self.strip_lb_inner(true, node_id)?;
-        debug_assert!(
-            !self.contains_lookbehind(result),
-            "should not contain lookbehind: {:?}",
-            self.pp(result)
-        );
+        if self.contains_lookbehind(result) {
+            return Err(ResharpError::UnsupportedPattern);
+        }
         Ok(result)
     }
 
@@ -2476,7 +2477,7 @@ impl RegexBuilder {
             let la_rel = self.get_lookahead_rel(head);
             let la_rel = if new_la_tail.is_kind(self, Kind::Lookahead) {
                 let tail_rel = self.get_lookahead_rel(new_la_tail);
-                tail_rel + la_rel
+                tail_rel.saturating_add(la_rel)
             } else {
                 u32::MAX
             };
