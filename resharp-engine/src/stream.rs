@@ -146,7 +146,7 @@ impl Regex {
             let rev = inner.b.strip_lb(rev).map_err(Error::Algebra)?;
             let rev = inner.b.normalize_rev(rev).map_err(Error::Algebra)?;
             let max_cap = inner.fwd.max_capacity;
-            inner.rev = Some(engine::LDFA::new(&mut inner.b, rev, max_cap)?);
+            inner.rev = Some(engine::LDFA::new_rev(&mut inner.b, rev, max_cap)?);
             let _ = self.stream_cache.rev_inited.set(());
         }
         Ok(())

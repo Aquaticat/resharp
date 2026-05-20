@@ -1,4 +1,5 @@
 #[derive(Clone, Copy, PartialEq, Hash, Eq, Debug, PartialOrd, Ord)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 pub struct TSet(pub [u64; 4]);
 
 impl TSet {

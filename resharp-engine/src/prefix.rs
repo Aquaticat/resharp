@@ -731,6 +731,7 @@ pub(crate) fn build_rev_prefix_search(
 
 /// Runtime prefix acceleration
 #[cfg_attr(debug_assertions, derive(Debug))]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize, Clone))]
 pub enum PrefixKind {
     AnchoredRev,
     AnchoredFwd(crate::accel::FwdPrefixSearch),
@@ -797,7 +798,7 @@ pub(crate) fn select_prefix(
     );
     #[cfg(feature = "convergence_prefix")]
     if !fwd_already {
-        let mut conv_ldfa = match crate::engine::LDFA::new(b, rev_start, max_cap) {
+        let mut conv_ldfa = match crate::engine::LDFA::new_rev(b, rev_start, max_cap) {
             Ok(l) => l,
             Err(_) => return Ok((kind, skip)),
         };

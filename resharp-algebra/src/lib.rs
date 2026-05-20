@@ -57,6 +57,7 @@ impl MetadataId {
 }
 
 #[derive(Clone, Copy, PartialEq, Hash, Eq, PartialOrd, Ord, Default)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 pub struct NodeId(pub u32);
 impl NodeId {
     pub const MISSING: NodeId = NodeId(id::MISSING);

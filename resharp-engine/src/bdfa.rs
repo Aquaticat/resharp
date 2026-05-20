@@ -13,10 +13,14 @@ const RARE_BYTE_FREQ_LIMIT: u16 = 25_000;
 /// only exists for a slight (20-30%) performance boost on short patterns
 /// when two DFAs arent necessary
 /// this is basically derivative based Aho-Corasick
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 pub(crate) struct BDFA {
+    #[cfg_attr(feature = "serialize", serde(skip))]
     initial_node: NodeId,
     /// states as Counted node chains.
+    #[cfg_attr(feature = "serialize", serde(skip))]
     pub states: Vec<NodeId>,
+    #[cfg_attr(feature = "serialize", serde(skip))]
     state_map: HashMap<NodeId, u16>,
     /// packed transition table: entry = (match_rel << 16) | next_state.
     /// 0 = uncached sentinel.
@@ -27,8 +31,10 @@ pub(crate) struct BDFA {
     pub match_end_off: Vec<u32>,
     /// log2 of minterm stride.
     pub mt_log: u32,
+    #[cfg_attr(feature = "serialize", serde(skip))]
     minterms: Vec<TSetId>,
     /// byte -> minterm index.
+    #[cfg_attr(feature = "serialize", serde(with = "crate::dump::array256"))]
     pub minterms_lookup: [u8; 256],
     /// initial state id.
     pub initial: u16,

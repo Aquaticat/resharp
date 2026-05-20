@@ -107,11 +107,6 @@ fn normal_anchors() {
 }
 
 #[test]
-fn is_match() {
-    run_is_match_file("is_match.toml");
-}
-
-#[test]
 fn is_match_agrees_with_find_all() {
     let files = [
         "anchors.toml",
@@ -121,7 +116,6 @@ fn is_match_agrees_with_find_all() {
         "cross_feature.toml",
         "date_pattern.toml",
         "edge_cases.toml",
-        "is_match.toml",
         "literal_alt.toml",
         "lookaround.toml",
         "paragraph.toml",

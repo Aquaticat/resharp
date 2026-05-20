@@ -33,8 +33,9 @@ mod wasm;
 pub use wasm::*;
 
 #[cfg(target_arch = "x86_64")]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 pub struct RevSearchBytes {
-    bytes: Vec<u8>,
+    pub(crate) bytes: Vec<u8>,
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -131,12 +132,13 @@ impl RevSearchBytes {
 
 #[cfg(target_arch = "x86_64")]
 #[cfg_attr(debug_assertions, derive(Debug))]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize, Clone))]
 pub struct FwdLiteralSearch {
     pub(crate) needle: Vec<u8>,
-    chunks: Vec<u64>,
-    rare_idx: usize,
-    rare_byte: u8,
-    confirm: (usize, u8),
+    pub(crate) chunks: Vec<u64>,
+    pub(crate) rare_idx: usize,
+    pub(crate) rare_byte: u8,
+    pub(crate) confirm: (usize, u8),
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -302,8 +304,9 @@ impl FwdLiteralSearch {
     }
 }
 
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 pub(crate) struct RevLiteralInner {
-    needle: Vec<u8>,
+    pub(crate) needle: Vec<u8>,
     chunks: Vec<u64>,
     rare_idx: usize,
     rare_byte: u8,
@@ -530,23 +533,26 @@ impl RevLiteralInner {
 }
 
 #[cfg(target_arch = "x86_64")]
-struct RevTeddyInner {
-    len: usize,
-    num_simd: usize,
-    masks: Box<TeddyMasks>,
-    sets: Vec<TSet>,
-    tail_offset: usize,
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
+pub(crate) struct RevTeddyInner {
+    pub(crate) len: usize,
+    pub(crate) num_simd: usize,
+    pub(crate) masks: TeddyMasks,
+    pub(crate) sets: Vec<TSet>,
+    pub(crate) tail_offset: usize,
 }
 
 #[cfg(target_arch = "x86_64")]
-enum RevSearchInner {
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
+pub(crate) enum RevSearchInner {
     Teddy(RevTeddyInner),
     Literal(RevLiteralInner),
 }
 
 #[cfg(target_arch = "x86_64")]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 pub struct RevTeddySearch {
-    inner: RevSearchInner,
+    pub(crate) inner: RevSearchInner,
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -728,28 +734,30 @@ impl RevTeddySearch {
 
 #[cfg(target_arch = "x86_64")]
 #[cfg_attr(debug_assertions, derive(Debug))]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize, Clone))]
 pub struct FwdPrefixSearch {
-    len: usize,
-    num_simd: usize,
-    masks: Box<TeddyMasks>,
+    pub(crate) len: usize,
+    pub(crate) num_simd: usize,
+    pub(crate) masks: TeddyMasks,
     pub(crate) sets: Vec<TSet>,
-    verify_order: [u8; 16],
+    pub(crate) verify_order: [u8; 16],
 }
 
 #[repr(align(32))]
 #[cfg_attr(debug_assertions, derive(Debug))]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize, Clone))]
 pub(crate) struct TeddyMasks {
-    lo: [[u8; 32]; 3],
-    hi: [[u8; 32]; 3],
+    pub(crate) lo: [[u8; 32]; 3],
+    pub(crate) hi: [[u8; 32]; 3],
 }
 
 #[cfg(target_arch = "x86_64")]
 impl TeddyMasks {
-    pub(crate) fn build(byte_sets_raw: &[Vec<u8>], num_simd: usize) -> Box<Self> {
-        let mut masks = Box::new(TeddyMasks {
+    pub(crate) fn build(byte_sets_raw: &[Vec<u8>], num_simd: usize) -> Self {
+        let mut masks = TeddyMasks {
             lo: [[0u8; 32]; 3],
             hi: [[0u8; 32]; 3],
-        });
+        };
         for i in 0..num_simd {
             let mut lo = [0u8; 16];
             let mut hi = [0u8; 16];
@@ -995,8 +1003,9 @@ impl FwdPrefixSearch {
 
 #[cfg(target_arch = "x86_64")]
 #[cfg_attr(debug_assertions, derive(Debug))]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize, Clone))]
 pub struct FwdRangeSearch {
-    len: usize,
+    pub(crate) len: usize,
     pub(crate) anchor_pos: usize,
     pub(crate) ranges: Vec<(u8, u8)>,
     pub(crate) sets: Vec<TSet>,
@@ -1095,7 +1104,7 @@ impl FwdRangeSearch {
 #[cfg(target_arch = "aarch64")]
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub struct FwdRangeSearch {
-    len: usize,
+    pub(crate) len: usize,
     pub(crate) anchor_pos: usize,
     pub(crate) ranges: Vec<(u8, u8)>,
     pub(crate) sets: Vec<TSet>,
@@ -1195,8 +1204,9 @@ impl FwdRangeSearch {
 }
 
 #[cfg(target_arch = "x86_64")]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 pub struct RevSearchRanges {
-    ranges: Vec<(u8, u8)>,
+    pub(crate) ranges: Vec<(u8, u8)>,
 }
 
 #[cfg(target_arch = "x86_64")]

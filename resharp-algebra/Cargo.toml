@@ -17,8 +17,10 @@ test = false
 
 [dependencies]
 rustc-hash = "2"
+serde = { version = "1", features = ["derive"], optional = true }
 
 [features]
 graphviz = []
 norewrite = []
 debug = []
+serialize = ["dep:serde"]

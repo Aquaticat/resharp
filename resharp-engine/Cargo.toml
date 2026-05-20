@@ -21,11 +21,14 @@ debug = ["resharp-algebra/debug"]
 diag = []
 precompile-tests = []
 convergence_prefix = []
+serialize = ["dep:serde", "dep:bincode", "resharp-algebra/serialize"]
 
 [dependencies]
 resharp-algebra.workspace = true
 resharp-parser.workspace = true
 rustc-hash = "2"
+serde = { version = "1", features = ["derive"], optional = true }
+bincode = { version = "1", optional = true }
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }

@@ -480,7 +480,7 @@ impl FwdLiteralSearch {
 struct RevTeddyInner {
     len: usize,
     num_simd: usize,
-    masks: Box<TeddyMasks>,
+    masks: TeddyMasks,
     sets: Vec<TSet>,
     tail_offset: usize,
 }
@@ -512,10 +512,10 @@ impl RevTeddySearch {
         }
 
         let num_simd = len.min(3);
-        let mut masks = Box::new(TeddyMasks {
+        let mut masks = TeddyMasks {
             lo: [[0u8; 32]; 3],
             hi: [[0u8; 32]; 3],
-        });
+        };
 
         for i in 0..num_simd {
             let mut lo = [0u8; 16];
@@ -834,7 +834,7 @@ pub struct FwdPrefixSearch {
     len: usize,
     num_simd: usize,
     simd_offsets: [usize; 3],
-    masks: Box<TeddyMasks>,
+    masks: TeddyMasks,
     pub(crate) sets: Vec<TSet>,
     verify_order: [u8; 16],
 }
@@ -855,10 +855,10 @@ impl FwdPrefixSearch {
 
         let num_simd = len.min(3);
         let mut simd_offsets = [0usize; 3];
-        let mut masks = Box::new(TeddyMasks {
+        let mut masks = TeddyMasks {
             lo: [[0u8; 32]; 3],
             hi: [[0u8; 32]; 3],
-        });
+        };
 
         for i in 0..num_simd {
             let pos = freq_order[i];

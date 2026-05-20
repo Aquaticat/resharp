@@ -192,8 +192,10 @@ fn skip_is_profitable(bytes: &[u8]) -> bool {
     }
     false
 }
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 pub struct LDFA {
     pub pruned: u16,
+    #[cfg_attr(feature = "serialize", serde(skip))]
     pub prune_memo: FxHashMap<NodeId, NodeId>,
     pub begin_table: Vec<u16>,
     pub center_table: Vec<u16>,
@@ -201,9 +203,13 @@ pub struct LDFA {
     pub effects: Vec<Vec<NullState>>,
     pub center_effect_id: Vec<u16>,
     pub mt_log: u32,
+    #[cfg_attr(feature = "serialize", serde(with = "crate::dump::array256"))]
     pub mt_lookup: [u8; 256],
+    #[cfg_attr(feature = "serialize", serde(skip))]
     pub minterms: Vec<TSetId>,
+    #[cfg_attr(feature = "serialize", serde(skip))]
     pub state_nodes: Vec<NodeId>,
+    #[cfg_attr(feature = "serialize", serde(skip))]
     pub node_to_state: HashMap<NodeId, u16>,
     pub skip_ids: Vec<u8>,
     pub skip_searchers: Vec<MintermSearchValue>,
@@ -215,7 +221,7 @@ pub struct LDFA {
 }
 
 impl LDFA {
-    pub fn new(b: &mut RegexBuilder, initial: NodeId, max_capacity: usize) -> Result<LDFA, Error> {
+    pub fn new_rev(b: &mut RegexBuilder, initial: NodeId, max_capacity: usize) -> Result<LDFA, Error> {
         Self::new_inner(b, initial, max_capacity, false)
     }
 

@@ -55,6 +55,9 @@ pub(crate) mod prefix;
 pub(crate) mod stream;
 pub use stream::StreamState;
 
+#[cfg(feature = "serialize")]
+pub(crate) mod dump;
+
 pub(crate) mod simd;
 
 
@@ -294,12 +297,32 @@ pub struct Regex {
     // pub(crate) trailing_star_anchored_left: bool,
     // pub(crate) trailing_star_branch_left: bool,
     pub(crate) hardened: bool,
-    pub(crate) has_bounded_prefix: bool,
     pub(crate) has_bounded: bool,
     pub(crate) lb_check_bytes: u8,
     pub(crate) fwd_lb_begin_nullable: bool,
     pub(crate) has_anchors: bool,
+    pub(crate) find_all: FindAll,
     pub(crate) stream_cache: stream::StreamCache,
+}
+
+/// cached dispatch decision for `find_all`. computed once at construction.
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FindAll {
+    /// language is ⊥; never matches.
+    EmptyLang,
+    /// `\A`-anchored; single forward scan from byte 0.
+    Anchored,
+    /// O(N·S) bulk scan for untrusted patterns.
+    Hardened,
+    /// SIMD forward-prefix anchored scan.
+    FwdPrefix,
+    /// SIMD forward-prefix with leading lookbehind.
+    FwdLbPrefix,
+    /// bounded-DFA fwd-only scan.
+    Bounded,
+    /// generic rev-collect + fwd-verify.
+    Dfa,
 }
 
 // not a security measure. only flags obvious cases where hardening results in better performance
@@ -898,12 +921,7 @@ impl Regex {
             selected,
             Some(prefix::PrefixKind::AnchoredFwd(_) | prefix::PrefixKind::AnchoredFwdLb(_))
         );
-        let needs_full_fwd = opts.hardened || has_fwd_prefix;
-        let fwd = if needs_full_fwd {
-            engine::LDFA::new(&mut b, fwd_start, max_cap)?
-        } else {
-            engine::LDFA::new_fwd(&mut b, fwd_start, max_cap)?
-        };
+        let fwd = engine::LDFA::new_fwd(&mut b, fwd_start, max_cap)?;
 
         let ts_fwd_start = {
             let with_ts = b.mk_concat(NodeId::TS, node);
@@ -911,7 +929,7 @@ impl Regex {
         };
         let mut ts_fwd = engine::LDFA::new_fwd(&mut b, ts_fwd_start, max_cap)?;
 
-        let mut rev_ts = engine::LDFA::new(&mut b, ts_rev_start, max_cap)?;
+        let mut rev_ts = engine::LDFA::new_rev(&mut b, ts_rev_start, max_cap)?;
         rev_ts.prefix_skip = rev_skip;
         rev_ts.ensure_pruned_skip();
 
@@ -951,10 +969,8 @@ impl Regex {
         let use_bounded = !has_fwd_prefix
             && max_length.is_some()
             && max_len <= 100
-            && fixed_length.is_none()
-            && !has_look
-            && !b.contains_anchors(node)
-            && pattern_len <= 150
+            && !b.contains_lookbehind(node)
+            && pattern_len <= 150 // a guess..
             && !empty_nullable;
 
         let bounded = if use_bounded {
@@ -964,10 +980,6 @@ impl Regex {
         };
 
         let has_bounded = bounded.is_some();
-        let has_bounded_prefix = bounded
-            .as_ref()
-            .is_some_and(|bd: &crate::bdfa::BDFA| bd.prefix.is_some());
-
         let has_anchors = b.contains_anchors(node);
 
         let hardened = if opts.hardened && !has_bounded && fixed_length.is_none() && max_cap >= 64 {
@@ -977,10 +989,7 @@ impl Regex {
         };
 
         let fas = if hardened {
-            // operate on fwd_start: the fwd DFA never sees the leading lookbehind
-            // (strip_lb), and FAS lives on top of that DFA.
-            let x = fas::FwdDFA::new(&fwd, fwd_start.contains_lookahead(&b));
-            Some(x)
+            Some(fas::FwdDFA::new(&fwd, fwd_start.contains_lookahead(&b)))
         } else {
             None
         };
@@ -998,6 +1007,9 @@ impl Regex {
                 bounded,
                 fas,
             }),
+            find_all: compute_find_all(
+                is_empty_lang, fwd_begin_anchored, hardened, has_bounded, &selected,
+            ),
             prefix: selected,
             fixed_length,
             empty_nullable,
@@ -1010,7 +1022,6 @@ impl Regex {
             // trailing_star_anchored_left,
             // trailing_star_branch_left,
             hardened,
-            has_bounded_prefix,
             has_bounded,
             lb_check_bytes,
             fwd_lb_begin_nullable,
@@ -1105,24 +1116,12 @@ impl Regex {
     /// assert_eq!((m[0].start, m[0].end), (4, 7));
     /// ```
     pub fn find_all(&self, input: &[u8]) -> Result<Vec<Match>, Error> {
-        if self.is_empty_lang {
-            return Ok(vec![]);
-        }
         if input.is_empty() {
-            return if self.empty_nullable {
+            return if self.empty_nullable && !self.is_empty_lang {
                 Ok(vec![Match { start: 0, end: 0 }])
             } else {
                 Ok(vec![])
             };
-        }
-        if self.fwd_begin_anchored {
-            return Ok(self.find_anchored(input)?.into_iter().collect());
-        }
-        if self.hardened {
-            if self.has_bounded_prefix || self.has_bounded {
-                return self.find_all_fwd_bounded(input);
-            }
-            return self.find_all_dfa(input);
         }
 
         // todo: `Y·_*` shape: single match into _*
@@ -1135,36 +1134,39 @@ impl Regex {
         // }
 
         #[cfg(all(feature = "debug", debug_assertions))]
-        {
-            let pre_kind = match &self.prefix {
-                None => "None",
-                Some(prefix::PrefixKind::AnchoredRev) => "AnchoredRev",
-                Some(prefix::PrefixKind::AnchoredFwd(_)) => "AnchoredFwd",
-                Some(prefix::PrefixKind::AnchoredFwdLb(_)) => "AnchoredFwdLb",
-                Some(prefix::PrefixKind::PotentialStart) => "PotentialStart",
-            };
-            eprintln!(
-                "[algorithm] pre={}, bound={}, end-null={}",
-                pre_kind, self.has_bounded, self.fwd_end_nullable
-            );
+        eprintln!("[algorithm] {:?}", self.find_all);
+
+        match self.find_all {
+            FindAll::EmptyLang => Ok(vec![]),
+            FindAll::Anchored => Ok(self.find_anchored(input)?.into_iter().collect()),
+            FindAll::Hardened | FindAll::Dfa => self.find_all_dfa(input),
+            FindAll::Bounded => self.find_all_fwd_bounded(input),
+            FindAll::FwdPrefix => match &self.prefix {
+                Some(prefix::PrefixKind::AnchoredFwd(fp)) => self.find_all_fwd_prefix(fp, input),
+                _ => unreachable!("FwdPrefix without AnchoredFwd prefix"),
+            },
+            FindAll::FwdLbPrefix => match &self.prefix {
+                Some(prefix::PrefixKind::AnchoredFwdLb(fp)) => self.find_all_fwd_lb_prefix(fp, input),
+                _ => unreachable!("FwdLbPrefix without AnchoredFwdLb prefix"),
+            },
         }
-       
-        match &self.prefix {
-            Some(prefix::PrefixKind::AnchoredFwd(fp)) => {
-                return self.find_all_fwd_prefix(fp, input);
-            }
-            Some(prefix::PrefixKind::AnchoredFwdLb(fp)) => {
-                return self.find_all_fwd_lb_prefix(fp, input);
-            }
-            Some(prefix::PrefixKind::AnchoredRev | prefix::PrefixKind::PotentialStart) => {
-                return self.find_all_dfa(input);
-            }
-            None => {}
-        }
-        if self.has_bounded {
-            return self.find_all_fwd_bounded(input);
-        }
-        self.find_all_dfa(input)
+    }
+}
+
+fn compute_find_all(
+    is_empty_lang: bool,
+    fwd_begin_anchored: bool,
+    hardened: bool,
+    has_bounded: bool,
+    prefix: &Option<prefix::PrefixKind>,
+) -> FindAll {
+    if is_empty_lang { return FindAll::EmptyLang; }
+    if fwd_begin_anchored { return FindAll::Anchored; }
+    if hardened { return FindAll::Hardened; }
+    match prefix {
+        Some(prefix::PrefixKind::AnchoredFwd(_)) => FindAll::FwdPrefix,
+        Some(prefix::PrefixKind::AnchoredFwdLb(_)) => FindAll::FwdLbPrefix,
+        _ => if has_bounded { FindAll::Bounded } else { FindAll::Dfa },
     }
 }
 

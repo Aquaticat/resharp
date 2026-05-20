@@ -1,6 +1,7 @@
 pub use crate::simd::RevTeddySearch;
 pub use crate::simd::TSet;
 
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 pub enum MintermSearchValue {
     Exact(crate::simd::RevSearchBytes),
     Range(crate::simd::RevSearchRanges),
@@ -28,6 +29,7 @@ impl MintermSearchValue {
 }
 
 #[cfg_attr(debug_assertions, derive(Debug))]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize, Clone))]
 pub enum FwdPrefixSearch {
     Literal(crate::simd::FwdLiteralSearch),
     Prefix(crate::simd::FwdPrefixSearch),

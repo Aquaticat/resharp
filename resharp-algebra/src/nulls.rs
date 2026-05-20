@@ -2,6 +2,7 @@ use rustc_hash::FxHashMap;
 use std::fmt::Debug;
 
 #[derive(Clone, Copy, PartialEq, Hash, Eq, PartialOrd, Ord)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 pub struct Nullability(pub u8);
 
 impl Debug for Nullability {
@@ -37,6 +38,7 @@ impl Nullability {
 }
 
 #[derive(PartialEq, Eq, Clone, Hash)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 pub struct NullState {
     pub mask: Nullability,
     pub rel: u32,
