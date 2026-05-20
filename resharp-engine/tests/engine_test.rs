@@ -112,6 +112,46 @@ fn is_match() {
 }
 
 #[test]
+fn is_match_agrees_with_find_all() {
+    let files = [
+        "anchors.toml",
+        "basic.toml",
+        "boolean.toml",
+        "ci.toml",
+        "cross_feature.toml",
+        "date_pattern.toml",
+        "edge_cases.toml",
+        "is_match.toml",
+        "literal_alt.toml",
+        "lookaround.toml",
+        "paragraph.toml",
+        "semantics.toml",
+        "word_boundary.toml",
+    ];
+    for filename in files {
+        let tests = load_tests(filename);
+        for tc in &tests {
+            if tc.ignore || tc.expect_error || tc.vs_regex || tc.anchored {
+                continue;
+            }
+            let re = Regex::new(&tc.pattern).unwrap_or_else(|e| {
+                panic!(
+                    "file={}, name={:?}, pattern={:?}: compile error: {}",
+                    filename, tc.name, tc.pattern, e
+                )
+            });
+            let found = re.is_match(tc.input.as_bytes()).unwrap();
+            assert_eq!(
+                found,
+                !tc.matches.is_empty(),
+                "file={}, name={:?}, pattern={:?}, input={:?}",
+                filename, tc.name, tc.pattern, tc.input
+            );
+        }
+    }
+}
+
+#[test]
 fn normal_boolean() {
     run_file("boolean.toml");
 }
@@ -1252,29 +1292,6 @@ fn rev_bot_skip_terminates_fast() {
         "`\\z` on 4MB took {:?}, expected sub-ms (BOT skip regressed?)",
         elapsed
     );
-}
-
-#[test]
-fn is_match_agrees_with_find_all_for_lookahead() {
-    use resharp::UnicodeMode;
-    let mk = |p: &str| {
-        let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
-        Regex::with_options(p, opts).unwrap()
-    };
-    let re = mk(r".(?=a|$)");
-    let hay = b"xa xb x\nxc x";
-    assert_eq!(
-        re.is_match(hay).unwrap(),
-        !re.find_all(hay).unwrap().is_empty()
-    );
-    for hay in [&b"\n"[..], b"\n\n", b"\n\n\n\n"] {
-        assert_eq!(
-            re.is_match(hay).unwrap(),
-            !re.find_all(hay).unwrap().is_empty(),
-            "is_match disagrees with find_all on hay={:?}",
-            hay
-        );
-    }
 }
 
 #[test]

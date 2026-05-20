@@ -752,12 +752,6 @@ impl PrefixKind {
         matches!(self, PrefixKind::AnchoredRev | PrefixKind::PotentialStart)
     }
 
-    pub(crate) fn fwd_search(&self) -> Option<&crate::accel::FwdPrefixSearch> {
-        match self {
-            PrefixKind::AnchoredFwd(s) | PrefixKind::AnchoredFwdLb(s) => Some(s),
-            _ => None,
-        }
-    }
 }
 
 #[allow(dead_code)]

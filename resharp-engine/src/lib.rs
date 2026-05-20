@@ -898,11 +898,7 @@ impl Regex {
             selected,
             Some(prefix::PrefixKind::AnchoredFwd(_) | prefix::PrefixKind::AnchoredFwdLb(_))
         );
-        let anchored_fwd = matches!(
-            selected,
-            Some(prefix::PrefixKind::AnchoredFwd(_) | prefix::PrefixKind::AnchoredFwdLb(_))
-        );
-        let needs_full_fwd = opts.hardened || anchored_fwd;
+        let needs_full_fwd = opts.hardened || has_fwd_prefix;
         let fwd = if needs_full_fwd {
             engine::LDFA::new(&mut b, fwd_start, max_cap)?
         } else {
@@ -1154,11 +1150,11 @@ impl Regex {
         }
        
         match &self.prefix {
-            Some(prefix::PrefixKind::AnchoredFwd(_)) => {
-                return self.find_all_fwd_prefix(input);
+            Some(prefix::PrefixKind::AnchoredFwd(fp)) => {
+                return self.find_all_fwd_prefix(fp, input);
             }
-            Some(prefix::PrefixKind::AnchoredFwdLb(_)) => {
-                return self.find_all_fwd_lb_prefix(input);
+            Some(prefix::PrefixKind::AnchoredFwdLb(fp)) => {
+                return self.find_all_fwd_lb_prefix(fp, input);
             }
             Some(prefix::PrefixKind::AnchoredRev | prefix::PrefixKind::PotentialStart) => {
                 return self.find_all_dfa(input);
@@ -1624,34 +1620,10 @@ impl Regex {
         if self.has_bounded {
             return self.is_match_fwd_bounded(input);
         }
-        if matches!(
-            self.prefix,
-            Some(prefix::PrefixKind::AnchoredFwdLb(_))
-        ) {
-            return self.is_match_fwd_lb_prefix(input);
-        }
-        if let Some(fwd_prefix) = self.prefix.as_ref().and_then(|p| p.fwd_search()) {
-            let inner = &mut *self.inner.lock().unwrap();
-            let prefix_len = fwd_prefix.len();
-            let mut search_start = 0;
-            while let Some(candidate) = fwd_prefix.find_fwd(input, search_start) {
-                let state = inner
-                    .fwd
-                    .walk_input(&mut inner.b, candidate, prefix_len, input)?;
-                if state != 0 {
-                    let max_end = inner.fwd.scan_fwd_from(
-                        &mut inner.b,
-                        state,
-                        candidate + prefix_len,
-                        input,
-                    )?;
-                    if max_end != engine::NO_MATCH && max_end > candidate {
-                        return Ok(true);
-                    }
-                }
-                search_start = candidate + 1;
-            }
-            return Ok(false);
+        match &self.prefix {
+            Some(prefix::PrefixKind::AnchoredFwdLb(fp)) => return self.is_match_fwd_lb_prefix(fp, input),
+            Some(prefix::PrefixKind::AnchoredFwd(fp)) => return self.is_match_fwd_prefix(fp, input),
+            _ => {}
         }
         let inner = &mut *self.inner.lock().unwrap();
         if inner.rev_ts.effects_id[engine::DFA_INITIAL as usize] != 0 {
