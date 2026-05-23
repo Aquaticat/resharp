@@ -3,7 +3,7 @@
 [![crates.io](https://img.shields.io/crates/v/resharp.svg)](https://crates.io/crates/resharp)
 [![docs.rs](https://docs.rs/resharp/badge.svg)](https://docs.rs/resharp)
 
-A high-performance, automata-based regex engine with first-class support for **intersection** (`&`), **complement** (`~`), and an any-byte wildcard (`_`). Non-backtracking, linear-time. Shines on complex patterns (large alternations, lookarounds, boolean combinations) where traditional engines degrade or fall back to slower paths.
+A high-performance, automata-based regex engine with first-class support for **intersection** (`&`), **complement** (`~`). Non-backtracking with linear-time matching. Shines on complex patterns (large alternations, lookarounds, boolean combinations) where traditional engines degrade or fall back to slower paths.
 
 [paper](https://dl.acm.org/doi/10.1145/3704837) | [blog post](https://iev.ee/blog/symbolic-derivatives-and-the-rust-rewrite-of-resharp/) | [syntax docs](https://github.com/ieviev/resharp/blob/main/docs/syntax.md) | [dotnet version](https://github.com/ieviev/resharp-dotnet) and [web playground](https://ieviev.github.io/resharp-webapp/)
 
