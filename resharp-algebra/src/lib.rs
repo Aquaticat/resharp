@@ -179,15 +179,6 @@ struct MetadataBuilder {
     pub array: Vec<Metadata>,
 }
 
-mod helpers {
-    pub(crate) fn incr_rel(n1: u32) -> u32 {
-        match n1.overflowing_add(1) {
-            (_, true) => u32::MAX,
-            (res, false) => res,
-        }
-    }
-}
-
 impl MetadataBuilder {
     fn new() -> MetadataBuilder {
         Self {
@@ -1425,7 +1416,7 @@ impl RegexBuilder {
 
                 let la = {
                     let this = &mut *self;
-                    let rel = helpers::incr_rel(rel);
+                    let rel = rel.saturating_add(1);
                     this.mk_binary(
                         la_body_der,
                         la_tail_der,
@@ -1440,7 +1431,7 @@ impl RegexBuilder {
                     let look_only = {
                         let this = &mut *self;
                         let right = TRegexId::MISSING;
-                        let rel = helpers::incr_rel(rel);
+                        let rel = rel.saturating_add(1);
                         this.mk_binary(
                             la_body_der,
                             right,
