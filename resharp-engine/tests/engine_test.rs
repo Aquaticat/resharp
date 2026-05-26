@@ -1905,3 +1905,4 @@ fn strip_lb_rejects_lookbehind_in_intersection() {
         Err(_) => {}
     }
 }
+#[test]fn dot_is_match_twice() {    let r = Regex::new(".").unwrap();    assert!(r.is_match(b"hello").unwrap());    assert!(r.is_match(b"hello").unwrap());}#[test]fn dotdot_is_match_twice() {    let r = Regex::new("..").unwrap();    assert!(r.is_match(b"hello").unwrap());    assert!(r.is_match(b"hello").unwrap());}

@@ -467,6 +467,7 @@ pub(crate) fn bdfa_scan<const PREFIX: u8, const ISMATCH: bool>(
         if !ISMATCH {
             matches.reserve(2048);
         }
+        let mut scratch: [Match; 1] = [Match { start: 0, end: 0 }];
         loop {
             if !ISMATCH && matches.len() == matches.capacity() {
                 matches.reserve(matches.capacity().max(256));
@@ -476,7 +477,11 @@ pub(crate) fn bdfa_scan<const PREFIX: u8, const ISMATCH: bool>(
             } else {
                 matches.capacity() - matches.len()
             };
-            let buf_ptr = unsafe { matches.as_mut_ptr().add(matches.len()) };
+            let buf_ptr = if ISMATCH {
+                scratch.as_mut_ptr()
+            } else {
+                unsafe { matches.as_mut_ptr().add(matches.len()) }
+            };
             let table = bounded.table.as_ptr();
             let meo = bounded.match_end_off.as_ptr();
             let (s, p, mc) = bdfa_inner::<{ Prefix::None as u8 }>(
