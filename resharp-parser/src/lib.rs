@@ -1416,6 +1416,103 @@ impl<'s> ResharpParser<'s> {
         }
     }
 
+
+    fn specialize_word_boundaries(&mut self, children: &mut [NodeId], tb: &mut TB<'s>) {
+        let wb = self.unicode_classes.wb;
+        let non_wb = self.unicode_classes.non_wb;
+        if wb == NodeId::MISSING {
+            return;
+        }
+        let word = self.unicode_classes.word;
+        let non_word = self.unicode_classes.non_word;
+        if word == NodeId::MISSING {
+            return;
+        }
+        // narrow check, could be done over the whole regex instead of one node 
+        // but i need to make sure the cost isnt too large
+        let word_pref = tb.mk_concat(word, NodeId::TS);
+        let non_word_pref = tb.mk_concat(non_word, NodeId::TS);
+        let word_suf = tb.mk_concat(NodeId::TS, word);
+        let non_word_suf = tb.mk_concat(NodeId::TS, non_word);
+        let len = children.len();
+        for k in 0..len {
+            let l = if k == 0 {
+                WordCharKind::Edge
+            } else {
+                Self::classify(tb, children[k - 1], word_suf, non_word_suf)
+            };
+            let r = if k + 1 >= len {
+                WordCharKind::Edge
+            } else {
+                Self::classify(tb, children[k + 1], word_pref, non_word_pref)
+            };
+            children[k] = Self::rewrite_wb_in_node(tb, children[k], wb, non_wb, word, l, r);
+        }
+    }
+
+    fn rewrite_wb_in_node(
+        b: &mut TB<'s>,
+        node: NodeId,
+        wb: NodeId,
+        non_wb: NodeId,
+        word: NodeId,
+        left: WordCharKind,
+        right: WordCharKind,
+    ) -> NodeId {
+        let boundary_match = if node == wb {
+            true
+        } else if node == non_wb {
+            false
+        } else if b.get_kind(node) == Kind::Union {
+            let l = Self::rewrite_wb_in_node(b, node.left(b), wb, non_wb, word, left, right);
+            let r = Self::rewrite_wb_in_node(b, node.right(b), wb, non_wb, word, left, right);
+            return b.mk_union(l, r);
+        } else {
+            return node;
+        };
+        use WordCharKind::*;
+        match (left, right) {
+            (NonWord, Word) | (Word, NonWord) => {
+                if boundary_match { NodeId::EPS } else { NodeId::BOT }
+            }
+            (Word, Word) | (NonWord, NonWord) => {
+                if boundary_match { NodeId::BOT } else { NodeId::EPS }
+            }
+            (Word, _) => {
+                if boundary_match { b.mk_neg_lookahead(word, 0) }
+                else {
+                    let tail = b.mk_concat(word, NodeId::TS);
+                    b.mk_lookahead(tail, NodeId::MISSING, 0)
+                }
+            }
+            (NonWord, _) => {
+                if boundary_match {
+                    let tail = b.mk_concat(word, NodeId::TS);
+                    b.mk_lookahead(tail, NodeId::MISSING, 0)
+                } else { b.mk_neg_lookahead(word, 0) }
+            }
+            (_, Word) => {
+                if boundary_match { b.mk_neg_lookbehind(word) }
+                else { b.mk_lookbehind(word, NodeId::MISSING) }
+            }
+            (_, NonWord) => {
+                if boundary_match { b.mk_lookbehind(word, NodeId::MISSING) }
+                else { b.mk_neg_lookbehind(word) }
+            }
+            _ => node,
+        }
+    }
+
+    fn classify(b: &mut TB<'s>, node: NodeId, word_dir: NodeId, non_word_dir: NodeId) -> WordCharKind {
+        if b.subsumes(word_dir, node) == Some(true) {
+            WordCharKind::Word
+        } else if b.subsumes(non_word_dir, node) == Some(true) {
+            WordCharKind::NonWord
+        } else {
+            WordCharKind::Unknown
+        }
+    }
+
     fn rewrite_word_boundary_in_concat(
         &mut self,
         asts: &[Ast],
@@ -1425,20 +1522,15 @@ impl<'s> ResharpParser<'s> {
         negated: bool,
     ) -> Result<(NodeId, usize)> {
         use WordCharKind::*;
-        let (word_id, not_word_id) = if self.global_full_unicode {
+        if self.global_full_unicode {
             self.unicode_classes.ensure_word_full(tb);
-            (self.unicode_classes.word, self.unicode_classes.non_word)
         } else if self.global_unicode && !self.global_ascii_perl {
             self.unicode_classes.ensure_word(tb);
-            (self.unicode_classes.word, self.unicode_classes.non_word)
         } else {
-            let az = tb.mk_range_u8(b'a', b'z');
-            let big = tb.mk_range_u8(b'A', b'Z');
-            let dig = tb.mk_range_u8(b'0', b'9');
-            let us = tb.mk_u8(b'_');
-            let w = tb.mk_unions([az, big, dig, us].into_iter());
-            (w, resharp_algebra::neg_class(tb, w))
-        };
+            self.unicode_classes.ensure_word_ascii(tb);
+        }
+        let word_id = self.unicode_classes.word;
+        let not_word_id = self.unicode_classes.non_word;
         let left = self.resolve_word_kind(asts, idx, -1, translator, tb, word_id, not_word_id)?;
         let right = self.resolve_word_kind(asts, idx, 1, translator, tb, word_id, not_word_id)?;
         let boundary_match = !negated;
@@ -1481,10 +1573,18 @@ impl<'s> ResharpParser<'s> {
                     Ok((tb.mk_neg_lookbehind(word_id), idx + 1))
                 }
             }
-            // TODO: (Unknown, Unknown) would need the full expansion
             //   \b = (?<=\w)(?!\w) | (?<!\w)(?=\w)
-            // but we don't want to do that because it's expensive so just treat it as unsupported.
-            _ => Err(self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex)),
+            //   \B = (?<=\w)(?=\w)  | (?<!\w)(?!\w)
+            //   TODO: expensive and the cost could be reduced further
+            _ => {
+                self.unicode_classes.ensure_wb(tb);
+                let node = if boundary_match {
+                    self.unicode_classes.wb
+                } else {
+                    self.unicode_classes.non_wb
+                };
+                Ok((node, idx + 1))
+            }
         }
     }
 
@@ -1815,6 +1915,7 @@ impl<'s> ResharpParser<'s> {
                     }
                     i += 1;
                 }
+                self.specialize_word_boundaries(&mut children, tb);
                 Ok(tb.mk_concats(children.iter().cloned()))
             }
             Ast::Intersection(intersection) => {

@@ -35,6 +35,8 @@ pub struct UnicodeClassCache {
     pub non_digit: NodeId,
     pub space: NodeId,
     pub non_space: NodeId,
+    pub wb: NodeId,
+    pub non_wb: NodeId,
 }
 
 impl Default for UnicodeClassCache {
@@ -46,6 +48,8 @@ impl Default for UnicodeClassCache {
             non_digit: NodeId::MISSING,
             space: NodeId::MISSING,
             non_space: NodeId::MISSING,
+            wb: NodeId::MISSING,
+            non_wb: NodeId::MISSING,
         }
     }
 }
@@ -56,6 +60,18 @@ impl UnicodeClassCache {
             self.word = build_word_class(b);
             self.non_word = neg_class(b, self.word);
         }
+    }
+
+    pub fn ensure_word_ascii(&mut self, b: &mut RegexBuilder) {
+        if self.word != NodeId::MISSING {
+            return;
+        }
+        let az = b.mk_range_u8(b'a', b'z');
+        let big = b.mk_range_u8(b'A', b'Z');
+        let dig = b.mk_range_u8(b'0', b'9');
+        let us = b.mk_u8(b'_');
+        self.word = b.mk_unions([az, big, dig, us].into_iter());
+        self.non_word = neg_class(b, self.word);
     }
 
     pub fn ensure_word_full(&mut self, b: &mut RegexBuilder) {
@@ -91,5 +107,28 @@ impl UnicodeClassCache {
             self.space = build_space_class_full(b);
             self.non_space = neg_class(b, self.space);
         }
+    }
+
+    // \b  = (?<=\w)(?!\w) | (?<!\w)(?=\w)
+    // \B  = (?<=\w)(?=\w)  | (?<!\w)(?!\w)
+    pub fn ensure_wb(&mut self, b: &mut RegexBuilder) {
+        if self.wb != NodeId::MISSING {
+            return;
+        }
+        debug_assert!(self.word != NodeId::MISSING, "call ensure_word(_full|_ascii) first");
+        let w = self.word;
+        let lb_w = b.mk_lookbehind(w, NodeId::MISSING);
+        let lb_nw = b.mk_neg_lookbehind(w);
+        let la_w = {
+            let tail = b.mk_concat(w, NodeId::TS);
+            b.mk_lookahead(tail, NodeId::MISSING, 0)
+        };
+        let la_nw = b.mk_neg_lookahead(w, 0);
+        let wb_a = b.mk_concat(lb_w, la_nw);
+        let wb_b = b.mk_concat(lb_nw, la_w);
+        self.wb = b.mk_union(wb_a, wb_b);
+        let nwb_a = b.mk_concat(lb_w, la_w);
+        let nwb_b = b.mk_concat(lb_nw, la_nw);
+        self.non_wb = b.mk_union(nwb_a, nwb_b);
     }
 }

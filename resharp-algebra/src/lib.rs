@@ -34,7 +34,7 @@ impl std::fmt::Display for ResharpError {
             }
             ResharpError::UnsupportedPattern => write!(
                 f,
-                "unsupported lookaround pattern (lookaround, word boundary, or `^`/`$` anchor inside a complement `~(...)`, or a lookbehind operand of an intersection `&`)"
+                "unsupported pattern: eg. lookaround, `\\b`/`^`/`$` inside a complement `~(...)` or a star `*`"
             ),
         }
     }
@@ -1249,6 +1249,27 @@ impl RegexBuilder {
         }
     }
 
+    pub fn transition_term_uniform(&mut self, der: TRegexId, set: TSetId) -> Option<NodeId> {
+        let mut term = self.get_tregex(der);
+        loop {
+            match *term {
+                TRegex::Leaf(node_id) => return Some(node_id),
+                TRegex::ITE(cond, _then, _else) => {
+                    let solver = self.solver();
+                    let hits_then = solver.is_sat_id(set, cond);
+                    let fully_in_then = solver.contains_id(cond, set);
+                    if fully_in_then {
+                        term = self.get_tregex(_then);
+                    } else if !hits_then {
+                        term = self.get_tregex(_else);
+                    } else {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+
     pub fn der(&mut self, node_id: NodeId, mask: Nullability) -> Result<TRegexId, ResharpError> {
         debug_assert!(mask != Nullability::ALWAYS, "attempting to derive w always");
         debug_assert!(
@@ -1367,21 +1388,27 @@ impl RegexBuilder {
                 if rel == u32::MAX {
                     let la_body_der = self.der(la_body, mask)?;
                     if la_tail.is_kind(self, Kind::Pred) {
-                        let transitioned =
-                            self.transition_term(la_body_der, la_tail.pred_tset(self));
-                        let new_la = self.mk_lookahead_internal(transitioned, NodeId::MISSING, 0);
-                        let concated = self.mk_concat(la_tail, new_la);
-                        return self.der(concated, mask);
+                        if let Some(transitioned) =
+                            self.transition_term_uniform(la_body_der, la_tail.pred_tset(self))
+                        {
+                            let new_la =
+                                self.mk_lookahead_internal(transitioned, NodeId::MISSING, 0);
+                            let concated = self.mk_concat(la_tail, new_la);
+                            return self.der(concated, mask);
+                        }
                     }
                     if la_tail.is_kind(self, Kind::Concat) && la_tail.left(self).is_pred(self) {
                         let left = la_tail.left(self);
                         let tset = left.pred_tset(self);
-                        let transitioned = self.transition_term(la_body_der, tset);
-                        let new_la = self.mk_lookahead_internal(transitioned, NodeId::MISSING, 0);
-                        let tail_right = la_tail.right(self);
-                        let concated = self.mk_concat(new_la, tail_right);
-                        let concated = self.mk_concat(left, concated);
-                        return self.der(concated, mask);
+                        if let Some(transitioned) = self.transition_term_uniform(la_body_der, tset)
+                        {
+                            let new_la =
+                                self.mk_lookahead_internal(transitioned, NodeId::MISSING, 0);
+                            let tail_right = la_tail.right(self);
+                            let concated = self.mk_concat(new_la, tail_right);
+                            let concated = self.mk_concat(left, concated);
+                            return self.der(concated, mask);
+                        }
                     }
                 }
 
@@ -2630,6 +2657,21 @@ impl RegexBuilder {
                     return Some(self.mk_concat(left.left(self), un));
                 }
 
+                // (\A)X | (?<=R)X => (?<=R|\A)X
+                {
+                    let t1 = left.right(self);
+                    let t2 = right.right(self);
+                    if t1 == t2 {
+                        let begin_lb = (head1 == NodeId::BEGIN
+                            && head2.is_kind(self, Kind::Lookbehind))
+                            || (head2 == NodeId::BEGIN && head1.is_kind(self, Kind::Lookbehind));
+                        if begin_lb {
+                            let un = self.mk_union(head1, head2);
+                            return Some(self.mk_concat(un, t1));
+                        }
+                    }
+                }
+
                 // xa|ya => (x|y)a - suffix factoring via reverse
                 // TODO: valid and looks prettier but .reverse is not good for builder perf,
                 // leaving out unless i find a case where it helps significantly
@@ -3370,6 +3412,14 @@ impl RegexBuilder {
         }
         if left == NodeId::TS {
             return self.init_as(key, left);
+        }
+        // \A | (?<=R) ==>  (?<=\A|R)
+        if left == NodeId::BEGIN && self.get_kind(right) == Kind::Lookbehind {
+            let lb_body = self.get_lookbehind_inner(right);
+            let lb_prev = self.get_lookbehind_prev(right);
+            let new_body = self.mk_union(NodeId::BEGIN, lb_body);
+            let rewritten = self.mk_lookbehind(new_body, lb_prev);
+            return self.init_as(key, rewritten);
         }
         match (self.get_kind(left), self.get_kind(right)) {
             (Kind::Union, _) => {

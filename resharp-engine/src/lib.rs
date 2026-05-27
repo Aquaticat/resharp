@@ -1407,6 +1407,75 @@ impl Regex {
     }
 
     #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
+    pub fn fwd_state_dump(&self) -> String {
+        let inner = &mut *self.inner.lock().unwrap();
+        let fwd = &inner.fwd;
+        let mut out = String::new();
+        for (i, &node) in fwd.state_nodes.iter().enumerate() {
+            let eid = fwd.effects_id.get(i).copied().unwrap_or(0);
+            let ceid = fwd.center_effect_id.get(i).copied().unwrap_or(0);
+            let pretty = inner.b.pp(node);
+            let pretty = if pretty.len() > 400 { format!("{}...", &pretty[..400]) } else { pretty };
+            out += &format!("  s[{}] eid={} ceid={} pp={}\n", i, eid, ceid, pretty);
+        }
+        out
+    }
+
+    #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
+    pub fn fwd_walk_trace(&self, input: &[u8]) -> String {
+        use std::fmt::Write;
+        let inner = &mut *self.inner.lock().unwrap();
+        let fwd = &mut inner.fwd;
+        let b = &mut inner.b;
+        let mut out = String::new();
+        if input.is_empty() { return out; }
+        let mt = fwd.mt_lookup[input[0] as usize] as u32;
+        let mut sid = fwd.begin_table[mt as usize];
+        writeln!(out, "pos=0 byte={:?} (BEGIN) -> s[{}]", input[0] as char, sid).unwrap();
+        Self::dump_fwd_state(&mut out, b, fwd, sid);
+        for i in 1..input.len() {
+            let mt = fwd.mt_lookup[input[i] as usize] as u32;
+            sid = fwd.lazy_transition(b, sid, mt).unwrap();
+            writeln!(out, "pos={} byte={:?} -> s[{}]", i, input[i] as char, sid).unwrap();
+            Self::dump_fwd_state(&mut out, b, fwd, sid);
+            if sid as u32 <= engine::DFA_DEAD as u32 { break; }
+        }
+        out
+    }
+
+    #[cfg(feature = "diag")]
+    fn dump_fwd_state(
+        out: &mut String,
+        b: &mut resharp_algebra::RegexBuilder,
+        fwd: &engine::LDFA,
+        sid: u16,
+    ) {
+        use std::fmt::Write;
+        if (sid as usize) >= fwd.state_nodes.len() {
+            writeln!(out, "  (uninitialized state)").unwrap();
+            return;
+        }
+        let node = fwd.state_nodes[sid as usize];
+        let eid = fwd.effects_id.get(sid as usize).copied().unwrap_or(0);
+        let ceid = fwd.center_effect_id.get(sid as usize).copied().unwrap_or(0);
+        let pp = b.pp(node);
+        let pp = if pp.len() > 240 { format!("{}...", &pp[..240]) } else { pp };
+        writeln!(out, "  pp = {}", pp).unwrap();
+        writeln!(out, "  eid={} (end), center_eid={}", eid, ceid).unwrap();
+        for (label, e) in [("end", eid), ("center", ceid)] {
+            if e != 0 && (e as usize) < fwd.effects.len() {
+                let entries: Vec<String> = fwd.effects[e as usize]
+                    .iter()
+                    .map(|n| format!("(mask={:#b},rel={})", n.mask.0, n.rel))
+                    .collect();
+                writeln!(out, "  effects[{}][{}] = [{}]", label, e, entries.join(", ")).unwrap();
+            }
+        }
+    }
+
+    #[cfg(feature = "diag")]
     fn dump_state(
         out: &mut String,
         b: &mut resharp_algebra::RegexBuilder,

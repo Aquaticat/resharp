@@ -12,31 +12,6 @@ fn load_tests(filename: &str) -> Vec<EngineCase> {
     file.test
 }
 
-fn run_is_match_file(filename: &str) {
-    let tests = load_tests(filename);
-    for tc in &tests {
-        if tc.ignore {
-            continue;
-        }
-        let re = Regex::new(&tc.pattern).unwrap_or_else(|e| {
-            panic!(
-                "file={}, name={:?}, pattern={:?}: compile error: {}",
-                filename, tc.name, tc.pattern, e
-            )
-        });
-        let found = re.is_match(tc.input.as_bytes()).unwrap();
-        assert_eq!(
-            found,
-            !tc.matches.is_empty(),
-            "file={}, name={:?}, pattern={:?}, input={:?}",
-            filename,
-            tc.name,
-            tc.pattern,
-            tc.input
-        );
-    }
-}
-
 fn run_file(filename: &str) {
     let tests = load_tests(filename);
     for tc in &tests {
@@ -1853,21 +1828,18 @@ fn js_numeric_literals() {
 //     assert!(ok(r#"\b[a-zA-Z-]+(="[^"]*"|='[^']*'|=[^\s>]*)?"#));
 // }
 
-// #[test]
-// fn test_word_boundary_group() {
-//     let ok = |pat: &str| resharp::Regex::new(pat).map(|_| true).unwrap_or_else(|e| { println!("FAIL {:?}: {}", pat, e); false });
-//     assert!(ok(r"(?:\A\w|[A-Z]|\b\w|\s+)"));
-// }
+#[test]
+fn test_word_boundary_group() {
+    let ok = |pat: &str| resharp::Regex::new(pat).map(|_| true).unwrap_or_else(|e| { println!("FAIL {:?}: {}", pat, e); false });
+    assert!(ok(r#"(\b[A-Z])"#));
+    assert!(ok(r#"((\b)[A-Z])"#));
+    assert!(ok(r"\b\w|\A\w"));
+    assert!(ok(r"(\b|\A)\w"));
+    assert!(ok(r"\b\w|\A\w"));
+    assert!(ok(r"(\b|\A)\w"));
+    // assert!(ok(r"[A-Z]|\b\w")); // possible, out of scope
+}
 
-// #[test]
-// fn test_mxbrowser_ua() {
-//     let re = resharp::Regex::new(r"(?i)\b(?:mxbrowser|mxios|myie2)/?([\-A-Za-z0-9_.]*)\b").unwrap();
-//     let input = b"Mozilla/5.0 MxBrowser/1.2.3 mxios/4.5 myie2/foo-bar";
-//     let ms = re.find_all(input).unwrap();
-//     let actual: Vec<&str> = ms.iter().map(|m| std::str::from_utf8(&input[m.start..m.end]).unwrap()).collect();
-//     for s in &actual { println!("{:?}", s); }
-//     assert_eq!(actual, &["MxBrowser/1.2.3", "mxios/4.5", "myie2/foo-bar"]);
-// }
 
 #[test]
 fn prefix_calc_terminates_on_complement_intersection_quantified() {
@@ -1891,6 +1863,17 @@ fn lookahead_rel_saturates_with_end_anchor_intersection() {
 fn lookahead_rel_saturates_with_nested_quantified_lookahead() {
     let _ = resharp::Regex::new(r"(?:(?!\?){1,2}){3}");
     let _ = resharp::Regex::new(r"(?:(?!abc)){4,12}a");
+}
+
+#[test]
+fn lookahead_rel_max_preserves_multibranch_body() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let mk_opts = || RegexOptions::default().unicode(UnicodeMode::Javascript);
+    let p2 = r"\b(?=[A-Za-z0-9_]*[A-Z])(?=[A-Za-z0-9_]*[a-z])(?=[A-Za-z0-9_]*\d)[A-Za-z_][A-Za-z0-9_]*\b";
+    let r2 = Regex::with_options(p2, mk_opts()).unwrap();
+    let ms = r2.find_all(b".eXT12\n").unwrap();
+    assert_eq!(ms.len(), 1);
+    assert_eq!((ms[0].start, ms[0].end), (1, 6));
 }
 
 #[test]
