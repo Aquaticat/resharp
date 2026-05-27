@@ -49,10 +49,6 @@ schemars = "0.8"
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = "0.5"
 
-[[bin]]
-name = "build_byte_freq"
-path = "src/bin/build_byte_freq.rs"
-
 [[bench]]
 name = "comparison"
 harness = false
