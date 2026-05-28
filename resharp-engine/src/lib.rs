@@ -746,8 +746,26 @@ fn ensure_supported_rec(
             }
         }
         Kind::Inter => {
-            ensure_supported_rec(b, node.left(b), false)?;
-            ensure_supported_rec(b, node.right(b), false)
+            let (l, r) = (node.left(b), node.right(b));
+            // distributing (A|B) & C eagerly to (A&C)|(B&C)
+            // to unlock some patterns outside of RE# fragment like `(^abc|def)&.*`
+            for (u, other) in [(l, r), (r, l)] {
+                if b.get_kind(u) == Kind::Union && u.contains_lookbehind(b) {
+                    let mut branches = Vec::new();
+                    collect_union_branches(b, u, &mut branches);
+                    let mut distributed = b.mk_inter(branches[0], other);
+                    for &br in &branches[1..] {
+                        let arm = b.mk_inter(br, other);
+                        distributed = b.mk_union(distributed, arm);
+                    }
+                    if !union_branches_distinguishable(b, distributed) {
+                        return Err(resharp_algebra::ResharpError::UnsupportedPattern);
+                    }
+                    return ensure_supported_rec(b, other, false);
+                }
+            }
+            ensure_supported_rec(b, l, false)?;
+            ensure_supported_rec(b, r, false)
         }
         Kind::Concat => {
             let left = node.left(b);

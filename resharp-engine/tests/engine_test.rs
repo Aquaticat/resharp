@@ -1149,6 +1149,18 @@ fn reject_lookahead_in_loop() {
     );
 }
 #[test]
+fn anchor_in_alt_intersect_dot_star() {
+    let pat = "(export|^function)&(.*)";
+    let opts = RegexOptions::default().unicode(resharp::UnicodeMode::Ascii);
+    let mkopts = || RegexOptions::default().unicode(resharp::UnicodeMode::Ascii);
+    let _ = opts;
+    let re = Regex::with_options(pat, mkopts()).unwrap();
+    let re_dist = Regex::with_options("(export&.*)|(^function&.*)", mkopts()).unwrap();
+    let hay = b"function foo\nexport bar\n  function baz\nexport qux";
+    assert_eq!(re.find_all(hay).unwrap(), re_dist.find_all(hay).unwrap());
+}
+
+#[test]
 fn hardened_long_word() {
     let p = r"\b[a-z]{12,}\b";
     let input = b"!extraordinary";
