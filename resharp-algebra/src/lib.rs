@@ -1174,6 +1174,11 @@ impl RegexBuilder {
         node_id == NodeId::TS
     }
 
+    pub fn is_begin_anchored(&self, node_id: NodeId) -> bool {
+        node_id == NodeId::BEGIN
+            || (self.get_kind(node_id) == Kind::Concat && node_id.left(self) == NodeId::BEGIN)
+    }
+
     pub fn ends_with_ts_any_branch(&self, node_id: NodeId) -> bool {
         if node_id == NodeId::TS {
             return true;

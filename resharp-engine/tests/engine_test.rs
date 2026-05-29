@@ -1922,6 +1922,30 @@ fn dotdot_is_match_twice() {
     assert!(r.is_match(b"hello").unwrap());
 }
 #[test]
+fn suffix_anchored_is_match() {
+    let re = Regex::new(r"\.(client|server)\z").unwrap();
+    for (s, want) in [
+        ("foo.client", true),
+        ("foo.server", true),
+        ("foo.clientx", false),
+        ("client", false),
+        (".client.", false),
+        ("", false),
+    ] {
+        assert_eq!(re.is_match(s.as_bytes()).unwrap(), want, "input={:?}", s);
+    }
+    // large input: match only at the very end, none elsewhere
+    let mut big = vec![b'a'; 64 * 1024];
+    let n = big.len();
+    big[n - 7..].copy_from_slice(b".client");
+    assert!(re.is_match(&big).unwrap());
+    assert!(!re.is_match(&vec![b'a'; 64 * 1024]).unwrap());
+    // end-nullable suffix-anchored must still work (falls back to general path)
+    let re2 = Regex::new(r"a?\z").unwrap();
+    assert!(re2.is_match(b"abc").unwrap());
+    assert!(re2.is_match(b"xyz").unwrap());
+}
+#[test]
 fn anchored_end() {
     let re = Regex::new(r"(^a|b$)&(.*)").unwrap();
     let m: Vec<[usize; 2]> = re

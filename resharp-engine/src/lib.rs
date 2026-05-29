@@ -288,6 +288,7 @@ pub struct Regex {
     /// found to be trivially unmatchable, not guaranteed before full expansion
     pub(crate) is_empty_lang: bool,
     pub(crate) fwd_begin_anchored: bool,
+    pub(crate) rev_end_anchored: bool,
     /// rev = _*, skip rev pass entirely
     pub(crate) rev_trivial: bool,
     pub(crate) initial_nullability: Nullability,
@@ -907,10 +908,9 @@ impl Regex {
         let ts_rev_start = b.ts_rev_start(node)?;
         let is_empty_lang = node == NodeId::BOT;
         // TODO: make it configurable to actually check and reject empty lang entriely
-        let fwd_begin_anchored = node == NodeId::BEGIN
-            || (b.get_kind(node) == resharp_algebra::Kind::Concat
-                && node.left(&b) == NodeId::BEGIN);
+        let fwd_begin_anchored = b.is_begin_anchored(node);
         let rev_trivial = b.nullability(ts_rev_start) == Nullability::ALWAYS;
+        let rev_end_anchored = !fwd_end_nullable && b.is_begin_anchored(ts_rev_start);
         let fixed_length = b.get_fixed_length(node);
         let (min_len, max_len) = b.get_min_max_length(node);
         let max_length = if max_len != u32::MAX {
@@ -1034,6 +1034,7 @@ impl Regex {
             always_nullable: initial_nullability == Nullability::ALWAYS,
             is_empty_lang,
             fwd_begin_anchored,
+            rev_end_anchored,
             rev_trivial,
             initial_nullability,
             fwd_end_nullable,
@@ -1705,6 +1706,11 @@ impl Regex {
         }
         if self.fwd_begin_anchored {
             return Ok(self.find_anchored(input)?.is_some());
+        }
+        if self.rev_end_anchored {
+            let inner = &mut *self.inner.lock().unwrap();
+            let start = inner.rev_ts.scan_rev_from(&mut inner.b, input.len(), 0, input)?;
+            return Ok(start != engine::NO_MATCH);
         }
         if self.has_bounded {
             return self.is_match_fwd_bounded(input);

@@ -656,3 +656,8 @@ name = "fas_caret_dotstar_dollar"
 pattern = '^.*$'
 input = "abc"
 matches = [[0, 3]]
+[[test]]
+name = "start_end_alt_intersect_dotstar"
+pattern = '(^a|b$)&(.*)'
+input = "ax\nxb\n"
+matches = [[0, 1], [4, 5]]
