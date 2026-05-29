@@ -2934,6 +2934,20 @@ impl RegexBuilder {
         }
 
         {
+            let l_union_lb = self.union_has_leading_lb(left);
+            let r_union_lb = self.union_has_leading_lb(right);
+            if l_union_lb || r_union_lb {
+                let (u, other) = if l_union_lb { (left, right) } else { (right, left) };
+                let mut acc = NodeId::BOT;
+                u.iter_union(self, &mut |b, v| {
+                    let inter = b.mk_inter(v, other);
+                    acc = b.mk_union(inter, acc);
+                });
+                return Some(acc);
+            }
+        }
+
+        {
             let l_is_clb = left.is_concat(self) && left.left(self).is_lookbehind(self);
             let r_is_clb = right.is_concat(self) && right.left(self).is_lookbehind(self);
             if l_is_clb || r_is_clb {
@@ -2988,6 +3002,15 @@ impl RegexBuilder {
         }
 
         None
+    }
+
+    fn union_has_leading_lb(&self, node: NodeId) -> bool {
+        if !node.is_union(self) {
+            return false;
+        }
+        node.any_union_component(self, |v| {
+            v.is_lookbehind(self) || (v.is_concat(self) && v.left(self).is_lookbehind(self))
+        })
     }
 
     fn attempt_rw_unions(&mut self, left: NodeId, right_union: NodeId) -> Option<NodeId> {

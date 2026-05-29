@@ -2,16 +2,6 @@
 members = ["resharp-algebra", "resharp-parser", "resharp-engine", "resharp-ffi"]
 resolver = "2"
 
-[profile.release]
-lto = true
-codegen-units = 1
-opt-level = 3
-
-[profile.bench]
-lto = true
-codegen-units = 1
-opt-level = 3
-
 [workspace.package]
 version = "0.6.5"
 edition = "2021"
@@ -24,3 +14,14 @@ rust-version = "1.70"
 resharp-algebra = { version = "0.6.5", path = "resharp-algebra" }
 resharp-parser  = { version = "0.6.5", path = "resharp-parser" }
 resharp         = { version = "0.6.5", path = "resharp-engine" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+
+[profile.bench]
+lto = true
+codegen-units = 1
+opt-level = 3
+

@@ -114,7 +114,10 @@ fn is_match_agrees_with_find_all() {
                 found,
                 !tc.matches.is_empty(),
                 "file={}, name={:?}, pattern={:?}, input={:?}",
-                filename, tc.name, tc.pattern, tc.input
+                filename,
+                tc.name,
+                tc.pattern,
+                tc.input
             );
         }
     }
@@ -1842,7 +1845,12 @@ fn js_numeric_literals() {
 
 #[test]
 fn test_word_boundary_group() {
-    let ok = |pat: &str| resharp::Regex::new(pat).map(|_| true).unwrap_or_else(|e| { println!("FAIL {:?}: {}", pat, e); false });
+    let ok = |pat: &str| {
+        resharp::Regex::new(pat).map(|_| true).unwrap_or_else(|e| {
+            println!("FAIL {:?}: {}", pat, e);
+            false
+        })
+    };
     assert!(ok(r#"(\b[A-Z])"#));
     assert!(ok(r#"((\b)[A-Z])"#));
     assert!(ok(r"\b\w|\A\w"));
@@ -1851,7 +1859,6 @@ fn test_word_boundary_group() {
     assert!(ok(r"(\b|\A)\w"));
     // assert!(ok(r"[A-Z]|\b\w")); // possible, out of scope
 }
-
 
 #[test]
 fn prefix_calc_terminates_on_complement_intersection_quantified() {
@@ -1892,7 +1899,9 @@ fn lookahead_rel_max_preserves_multibranch_body() {
 fn strip_lb_rejects_lookbehind_in_intersection() {
     match resharp::Regex::new("(?:(?=a)&(?<=_))") {
         Ok(re) => {
-            let ms = re.find_all(b"________________________________________________________________").unwrap();
+            let ms = re
+                .find_all(b"________________________________________________________________")
+                .unwrap();
             assert!(ms.is_empty(), "spurious matches: {:?}", ms);
             let ms = re.find_all(&[b'a'; 128]).unwrap();
             assert!(ms.is_empty(), "spurious matches on a's: {:?}", ms);
@@ -1900,4 +1909,26 @@ fn strip_lb_rejects_lookbehind_in_intersection() {
         Err(_) => {}
     }
 }
-#[test]fn dot_is_match_twice() {    let r = Regex::new(".").unwrap();    assert!(r.is_match(b"hello").unwrap());    assert!(r.is_match(b"hello").unwrap());}#[test]fn dotdot_is_match_twice() {    let r = Regex::new("..").unwrap();    assert!(r.is_match(b"hello").unwrap());    assert!(r.is_match(b"hello").unwrap());}
+#[test]
+fn dot_is_match_twice() {
+    let r = Regex::new(".").unwrap();
+    assert!(r.is_match(b"hello").unwrap());
+    assert!(r.is_match(b"hello").unwrap());
+}
+#[test]
+fn dotdot_is_match_twice() {
+    let r = Regex::new("..").unwrap();
+    assert!(r.is_match(b"hello").unwrap());
+    assert!(r.is_match(b"hello").unwrap());
+}
+#[test]
+fn anchored_end() {
+    let re = Regex::new(r"(^a|b$)&(.*)").unwrap();
+    let m: Vec<[usize; 2]> = re
+        .find_all(b"ax\nxb\n")
+        .unwrap()
+        .iter()
+        .map(|m| [m.start, m.end])
+        .collect();
+    assert_eq!(m, vec![[0, 1], [4, 5]]);
+}
