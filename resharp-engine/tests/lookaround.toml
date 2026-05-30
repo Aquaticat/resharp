@@ -10,6 +10,12 @@ input = "b"
 matches = [[0, 0], [1, 1]]
 
 [[test]]
+name = "lookahead_after_unsatisfiable_string_anchor"
+pattern = '\n\A(?=b)'
+input = "abc"
+matches = []
+
+[[test]]
 name = "lookahead_conditional_digit"
 pattern = '1(?=[012])\d'
 input = "11"

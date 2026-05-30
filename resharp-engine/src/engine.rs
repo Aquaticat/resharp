@@ -314,6 +314,11 @@ impl LDFA {
         while effects.len() < b.nulls_count() {
             effects.push(b.nulls_entry_vec(effects.len() as u32));
         }
+        // in case initial state is bot
+        if effects_id.len() <= DFA_INITIAL as usize {
+            effects_id.resize(DFA_INITIAL as usize + 1, 0u16);
+            center_effect_id.resize(DFA_INITIAL as usize + 1, EID_NONE as u16);
+        }
         let skip_ids = vec![0u8; state_nodes.len()];
 
         Ok(LDFA {
