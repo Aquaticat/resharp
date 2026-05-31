@@ -267,3 +267,15 @@ name = "unanchored_fwd_ascii_word"
 pattern = '\w\w-\w\w'
 input = "xxxxx00-00yyyyy"
 matches = [[5, 10]]
+
+[[test]]
+name = "b_then_B_is_contradiction"
+pattern = '\b\B'
+input = "ab"
+matches = []
+
+[[test]]
+name = "B_then_b_is_contradiction"
+pattern = '\B\b'
+input = "ab"
+matches = []

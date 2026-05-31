@@ -661,3 +661,9 @@ name = "start_end_alt_intersect_dotstar"
 pattern = '(^a|b$)&(.*)'
 input = "ax\nxb\n"
 matches = [[0, 1], [4, 5]]
+
+[[test]]
+name = "literal_branch_does_not_poison_end_anchored_branch"
+pattern = '<!|>\z'
+input = "x>"
+matches = [[1, 2]]

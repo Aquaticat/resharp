@@ -1396,11 +1396,26 @@ impl<'s> ResharpParser<'s> {
         }
     }
 
+    fn is_transparent_for_dir(ast: &Ast, dir: isize) -> bool {
+        match ast {
+            Ast::Lookaround(la) => match la.kind {
+                ast::LookaroundKind::PositiveLookahead
+                | ast::LookaroundKind::NegativeLookahead => dir < 0,
+                ast::LookaroundKind::PositiveLookbehind
+                | ast::LookaroundKind::NegativeLookbehind => dir > 0,
+            },
+            _ => false,
+        }
+    }
+
     fn concat_neighbor_kind(asts: &[Ast], idx: usize, dir: isize) -> WordCharKind {
         use WordCharKind::*;
         let next = idx as isize + dir;
         if next < 0 || next >= asts.len() as isize {
             return Edge;
+        }
+        if Self::is_transparent_for_dir(&asts[next as usize], dir) {
+            return Self::concat_neighbor_kind(asts, next as usize, dir);
         }
         let kind = Self::word_char_kind(&asts[next as usize], dir < 0);
         match kind {
@@ -1504,6 +1519,9 @@ impl<'s> ResharpParser<'s> {
     }
 
     fn classify(b: &mut TB<'s>, node: NodeId, word_dir: NodeId, non_word_dir: NodeId) -> WordCharKind {
+        if b.contains_look(node) || b.contains_anchors(node) {
+            return WordCharKind::Unknown;
+        }
         if b.subsumes(word_dir, node) == Some(true) {
             WordCharKind::Word
         } else if b.subsumes(non_word_dir, node) == Some(true) {
@@ -1859,6 +1877,7 @@ impl<'s> ResharpParser<'s> {
             Ast::Concat(c) => {
                 let mut concat_translator: Option<Translator> = None;
                 let mut children = vec![];
+                let mut prev_boundary_child: Option<usize> = None;
                 let mut i = 0;
                 while i < c.asts.len() {
                     let ast = &c.asts[i];
@@ -1887,22 +1906,26 @@ impl<'s> ResharpParser<'s> {
                             i += 1;
                             continue;
                         }
-                        Ast::Assertion(a) if a.kind == ast::AssertionKind::WordBoundary => {
+                        Ast::Assertion(a)
+                            if a.kind == ast::AssertionKind::WordBoundary
+                                || a.kind == ast::AssertionKind::NotWordBoundary =>
+                        {
+                            let negated = a.kind == ast::AssertionKind::NotWordBoundary;
                             let node = self
-                                .rewrite_word_boundary_in_concat(&c.asts, i, translator, tb, false)?;
-                            children.push(node.0);
+                                .rewrite_word_boundary_in_concat(&c.asts, i, translator, tb, negated)?;
+                            match prev_boundary_child {
+                                Some(idx) => children[idx] = tb.mk_inter(children[idx], node.0),
+                                None => {
+                                    children.push(node.0);
+                                    prev_boundary_child = Some(children.len() - 1);
+                                }
+                            }
                             i = node.1; // skip consumed lookaheads
-                            continue;
-                        }
-                        Ast::Assertion(a) if a.kind == ast::AssertionKind::NotWordBoundary => {
-                            let node = self
-                                .rewrite_word_boundary_in_concat(&c.asts, i, translator, tb, true)?;
-                            children.push(node.0);
-                            i = node.1;
                             continue;
                         }
                         _ => {}
                     }
+                    prev_boundary_child = None;
                     match concat_translator {
                         Some(_) => match self.ast_to_node_id(ast, &mut concat_translator, tb) {
                             Ok(node_id) => children.push(node_id),

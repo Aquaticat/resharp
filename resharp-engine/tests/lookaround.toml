@@ -719,3 +719,9 @@ name = "neg_lookahead_shared_prefix_string_anchored"
 pattern = '\A(?!a*c)a*c\z'
 input = "aaa"
 matches = []
+
+[[test]]
+name = "lookahead_then_word_boundary"
+pattern = '\w(?=\s*\()\b'
+input = "f ("
+matches = [[0, 1]]

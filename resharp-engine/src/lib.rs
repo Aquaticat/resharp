@@ -988,6 +988,7 @@ impl Regex {
             && max_length.is_some()
             && max_len <= 100
             && !b.contains_lookbehind(node)
+            && !b.contains_anchors(node)
             && pattern_len <= 150 // a guess..
             && !empty_nullable;
 

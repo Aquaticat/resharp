@@ -2446,6 +2446,14 @@ impl RegexBuilder {
         // }
 
         if tail.is_lookbehind(self) {
+            let tail_prev = self.get_lookbehind_prev(tail);
+            if head.is_lookahead(self)
+                && self.get_lookahead_rel(head) == 0
+                && self.get_lookahead_tail(head).is_missing()
+                && (tail_prev == NodeId::MISSING || tail_prev == NodeId::EPS)
+            {
+                return Some(self.mk_concat(tail, head));
+            }
             let lbleft = self.mk_concat(head, self.get_lookbehind_prev(tail).missing_to_eps());
             return self
                 .mk_lookbehind_internal(self.get_lookbehind_inner(tail).missing_to_eps(), lbleft)

@@ -1956,3 +1956,21 @@ fn anchored_end() {
         .collect();
     assert_eq!(m, vec![[0, 1], [4, 5]]);
 }
+
+#[test]
+fn lookaround_commute() {
+    let re = Regex::new(r"(?=b)(?<=a)").unwrap();
+    let m: Vec<[usize; 2]> = re.find_all(b"ab").unwrap().iter().map(|m| [m.start, m.end]).collect();
+    assert_eq!(m, vec![[1, 1]]);
+    let re2 = Regex::new(r"x(?=a)(?<=a)").unwrap();
+    assert!(re2.find_all(b"xay").unwrap().is_empty());
+}
+
+#[test]
+fn grouped_boundary_contradiction() {
+    match Regex::new(r"(\b)(\B)") {
+        Ok(re) => assert!(re.find_all(b"ab").unwrap().is_empty()),
+        Err(_) => {}
+    }
+}
+
