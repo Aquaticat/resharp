@@ -1676,9 +1676,11 @@ impl RegexBuilder {
                 self.init_metadata(node_id, meta_id);
             }
             Kind::Lookahead => {
-                let mut nulls = self.get_nulls_id(inst.left);
-                // lookahead nulls shifted by rel (distance to body match)
-                nulls = self.mb.nb.add_rel(nulls, inst.extra);
+                let mut nulls = if inst.extra == u32::MAX {
+                    NullsId::EMPTY
+                } else {
+                    self.mb.nb.add_rel(self.get_nulls_id(inst.left), inst.extra)
+                };
                 let left_nullability = inst.left.nullability(self);
                 let nulls_right = self.get_nulls_id_w_mask(inst.right, left_nullability);
 

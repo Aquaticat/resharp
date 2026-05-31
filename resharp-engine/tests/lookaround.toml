@@ -713,3 +713,9 @@ name = "union_lb_branch_first_byte_disjoint_dashes_3"
 pattern = '(^---)|([^-]---)'
 input = "----"
 matches = [[0, 3]]
+
+[[test]]
+name = "neg_lookahead_shared_prefix_string_anchored"
+pattern = '\A(?!a*c)a*c\z'
+input = "aaa"
+matches = []
