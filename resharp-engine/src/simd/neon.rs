@@ -541,6 +541,7 @@ impl RevTeddySearch {
         }
     }
 
+    #[cfg(feature = "convergence_prefix")]
     pub fn add_tail_offset(mut self, extra: u32) -> Self {
         match &mut self.inner {
             RevSearchInner::Teddy(t) => t.tail_offset += extra as usize,
@@ -549,6 +550,7 @@ impl RevTeddySearch {
         self
     }
 
+    #[cfg(feature = "convergence_prefix")]
     pub fn len(&self) -> usize {
         match &self.inner {
             RevSearchInner::Teddy(t) => t.len,
