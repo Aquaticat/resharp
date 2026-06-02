@@ -19,6 +19,14 @@ pub fn has_simd() -> bool {
     }
 }
 
+#[inline]
+fn read_partial_u64(bytes: &[u8]) -> u64 {
+    debug_assert!(bytes.len() < 8);
+    let mut chunk = [0u8; 8];
+    chunk[..bytes.len()].copy_from_slice(bytes);
+    u64::from_ne_bytes(chunk)
+}
+
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
@@ -220,9 +228,8 @@ impl FwdLiteralSearch {
                 off += 8;
             }
             if off < n {
-                let h = (hp.add(off) as *const u64).read_unaligned();
-                let mask = (1u64 << ((n - off) * 8)) - 1;
-                if (h ^ self.chunks[ci]) & mask != 0 {
+                let h = read_partial_u64(&haystack[start + off..start + n]);
+                if h != self.chunks[ci] {
                     return false;
                 }
             }
@@ -390,9 +397,8 @@ impl RevLiteralInner {
                 off += 8;
             }
             if off < n {
-                let h = (hp.add(off) as *const u64).read_unaligned();
-                let mask = (1u64 << ((n - off) * 8)) - 1;
-                if (h ^ self.chunks[ci]) & mask != 0 {
+                let h = read_partial_u64(&haystack[start + off..start + n]);
+                if h != self.chunks[ci] {
                     return false;
                 }
             }

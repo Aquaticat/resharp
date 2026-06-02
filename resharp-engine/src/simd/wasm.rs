@@ -2,7 +2,7 @@
 
 use core::arch::wasm32::*;
 
-use super::{TSet, TeddyMasks, BYTE_FREQ};
+use super::{read_partial_u64, TSet, TeddyMasks, BYTE_FREQ};
 
 #[inline(always)]
 unsafe fn teddy_chunk<const N: usize>(
@@ -139,9 +139,8 @@ impl FwdLiteralSearch {
                 off += 8;
             }
             if off < n {
-                let h = (hp.add(off) as *const u64).read_unaligned();
-                let mask = (1u64 << ((n - off) * 8)) - 1;
-                if (h ^ self.chunks[ci]) & mask != 0 {
+                let h = read_partial_u64(&haystack[start + off..start + n]);
+                if h != self.chunks[ci] {
                     return false;
                 }
             }
