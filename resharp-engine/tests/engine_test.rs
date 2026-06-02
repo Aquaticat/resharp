@@ -2020,6 +2020,20 @@ fn literal_does_not_match_across_newline() {
 }
 
 #[test]
+fn literal_aaa_in_aaaa_leftmost_non_overlapping() {
+    let pattern = "aaa";
+    let haystack = "aaaa";
+    let regex = Regex::new(pattern).unwrap();
+    let matches: Vec<[usize; 2]> = regex
+        .find_all(haystack.as_bytes())
+        .unwrap()
+        .iter()
+        .map(|m| [m.start, m.end])
+        .collect();
+    assert_eq!(matches, vec![[0, 3]]);
+}
+
+#[test]
 #[ignore = "catalogue of known-unsupported patterns to handle later"]
 fn known_unsupported_patterns_reject() {
     let unsupported = [
