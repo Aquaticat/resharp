@@ -1984,6 +1984,42 @@ fn counted_rev_skip_no_boundary_double_consume() {
 }
 
 #[test]
+fn long_union_missing_literal_suffix_has_no_match() {
+    let pattern = "wwwwwwwwwwveeg|eggggeg|eeg|f|wveeg|eggggeg|eeg|f|eeeg|eeg|b|g|ee|te|zte|mte|zte|mje|.zt..rr...z.wwwwwwwwwwv|ee|te|zte|mte|zte|mje|.zt..rr...z..z..nj.ek";
+    let haystack = "ezwwwwwwwwwwwwwwwwwwwwww";
+    let regex = Regex::with_options(
+        pattern,
+        RegexOptions::default().unicode(resharp::UnicodeMode::Ascii),
+    )
+    .unwrap();
+    let matches: Vec<[usize; 2]> = regex
+        .find_all(haystack.as_bytes())
+        .unwrap()
+        .iter()
+        .map(|m| [m.start, m.end])
+        .collect();
+    assert_eq!(matches, Vec::<[usize; 2]>::new());
+}
+
+#[test]
+fn long_dot_union_does_not_match_short_haystack() {
+    let pattern = "............n.......n.n.t.t..t|ee";
+    let haystack = "ennn";
+    let regex = Regex::with_options(
+        pattern,
+        RegexOptions::default().unicode(resharp::UnicodeMode::Full),
+    )
+    .unwrap();
+    assert!(!regex.is_match(haystack.as_bytes()).unwrap());
+}
+
+#[test]
+fn literal_does_not_match_across_newline() {
+    let regex = Regex::new("ccc").unwrap();
+    assert!(!regex.is_match(b"cc\nc").unwrap());
+}
+
+#[test]
 #[ignore = "catalogue of known-unsupported patterns to handle later"]
 fn known_unsupported_patterns_reject() {
     let unsupported = [
