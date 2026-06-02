@@ -6,7 +6,7 @@
 pub mod ast;
 use std::cell::{Cell, RefCell};
 
-use ast::{Ast, Concat, ErrorKind, GroupKind, LookaroundKind};
+use ast::{Ast, Concat, ErrorKind, GroupKind, LookaroundKind, RepetitionKind};
 use regex_syntax::{
     ast::{
         ClassAscii, ClassBracketed, ClassPerl, ClassSet, ClassSetBinaryOpKind, ClassSetItem,
@@ -88,22 +88,33 @@ fn is_word_byte(b: u8) -> bool {
 }
 
 fn class_set_item_word_kind(item: &regex_syntax::ast::ClassSetItem) -> WordCharKind {
-    use regex_syntax::ast::{ClassSetItem, ClassPerlKind};
+    use regex_syntax::ast::{ClassPerlKind, ClassSetItem};
     use WordCharKind::*;
     match item {
         ClassSetItem::Empty(_) => Unknown,
         ClassSetItem::Literal(l) => {
-            if is_word_byte(l.c as u8) { Word } else { NonWord }
+            if is_word_byte(l.c as u8) {
+                Word
+            } else {
+                NonWord
+            }
         }
         ClassSetItem::Range(r) => {
             let all_word = (r.start.c as u8..=r.end.c as u8).all(is_word_byte);
             let all_non = (r.start.c as u8..=r.end.c as u8).all(|b| !is_word_byte(b));
-            if all_word { Word } else if all_non { NonWord } else { Unknown }
+            if all_word {
+                Word
+            } else if all_non {
+                NonWord
+            } else {
+                Unknown
+            }
         }
         ClassSetItem::Perl(p) => match (&p.kind, p.negated) {
             (ClassPerlKind::Word, false) => Word,
             (ClassPerlKind::Word, true) => NonWord,
             (ClassPerlKind::Space, false) => NonWord,
+            (ClassPerlKind::Digit, false) => Word,
             _ => Unknown,
         },
         ClassSetItem::Bracketed(b) => class_bracketed_word_kind(b),
@@ -112,6 +123,7 @@ fn class_set_item_word_kind(item: &regex_syntax::ast::ClassSetItem) -> WordCharK
             for item in &u.items {
                 let k = class_set_item_word_kind(item);
                 kind = match (kind, k) {
+                    (_, Unknown) => return Unknown,
                     (Unknown, _) => k,
                     (Word, Word) => Word,
                     (NonWord, NonWord) => NonWord,
@@ -125,19 +137,115 @@ fn class_set_item_word_kind(item: &regex_syntax::ast::ClassSetItem) -> WordCharK
 }
 
 fn class_bracketed_word_kind(c: &regex_syntax::ast::ClassBracketed) -> WordCharKind {
+    use regex_syntax::ast::{ClassPerlKind, ClassSet, ClassSetItem};
     use WordCharKind::*;
-    let inner = match &c.kind {
-        regex_syntax::ast::ClassSet::Item(item) => class_set_item_word_kind(item),
-        regex_syntax::ast::ClassSet::BinaryOp(_) => Unknown,
-    };
     if c.negated {
-        match inner {
-            Word => NonWord,
-            NonWord => Word,
+        return match &c.kind {
+            ClassSet::Item(ClassSetItem::Perl(p)) if p.kind == ClassPerlKind::Word => {
+                if p.negated {
+                    Word
+                } else {
+                    NonWord
+                }
+            }
             _ => Unknown,
-        }
+        };
+    }
+    match &c.kind {
+        ClassSet::Item(item) => class_set_item_word_kind(item),
+        ClassSet::BinaryOp(_) => Unknown,
+    }
+}
+
+fn ascii_class_lit(span: Span, c: char) -> regex_syntax::ast::Literal {
+    regex_syntax::ast::Literal {
+        span,
+        kind: regex_syntax::ast::LiteralKind::Verbatim,
+        c,
+    }
+}
+
+fn ascii_class_range(span: Span, a: char, b: char) -> regex_syntax::ast::ClassSetItem {
+    regex_syntax::ast::ClassSetItem::Range(regex_syntax::ast::ClassSetRange {
+        span,
+        start: ascii_class_lit(span, a),
+        end: ascii_class_lit(span, b),
+    })
+}
+
+fn ascii_perl_positive(
+    span: Span,
+    kind: &regex_syntax::ast::ClassPerlKind,
+) -> regex_syntax::ast::ClassSetItem {
+    use regex_syntax::ast::{ClassPerlKind, ClassSetItem, ClassSetUnion};
+    match kind {
+        ClassPerlKind::Digit => ascii_class_range(span, '0', '9'),
+        ClassPerlKind::Word => ClassSetItem::Union(ClassSetUnion {
+            span,
+            items: vec![
+                ascii_class_range(span, 'a', 'z'),
+                ascii_class_range(span, 'A', 'Z'),
+                ascii_class_range(span, '0', '9'),
+                ClassSetItem::Literal(ascii_class_lit(span, '_')),
+            ],
+        }),
+        ClassPerlKind::Space => ClassSetItem::Union(ClassSetUnion {
+            span,
+            items: ['\t', '\n', '\x0B', '\x0C', '\r', ' ']
+                .into_iter()
+                .map(|c| ClassSetItem::Literal(ascii_class_lit(span, c)))
+                .collect(),
+        }),
+    }
+}
+
+fn ascii_perl_set_item(
+    span: Span,
+    kind: &regex_syntax::ast::ClassPerlKind,
+    negated: bool,
+) -> regex_syntax::ast::ClassSetItem {
+    use regex_syntax::ast::{ClassBracketed, ClassSet, ClassSetItem};
+    let positive = ascii_perl_positive(span, kind);
+    if negated {
+        ClassSetItem::Bracketed(Box::new(ClassBracketed {
+            span,
+            negated: true,
+            kind: ClassSet::Item(positive),
+        }))
     } else {
-        inner
+        positive
+    }
+}
+
+fn rewrite_ascii_perl_set(set: &regex_syntax::ast::ClassSet) -> regex_syntax::ast::ClassSet {
+    use regex_syntax::ast::{ClassSet, ClassSetBinaryOp};
+    match set {
+        ClassSet::Item(item) => ClassSet::Item(rewrite_ascii_perl_item(item)),
+        ClassSet::BinaryOp(op) => ClassSet::BinaryOp(ClassSetBinaryOp {
+            span: op.span,
+            kind: op.kind.clone(),
+            lhs: Box::new(rewrite_ascii_perl_set(&op.lhs)),
+            rhs: Box::new(rewrite_ascii_perl_set(&op.rhs)),
+        }),
+    }
+}
+
+fn rewrite_ascii_perl_item(
+    item: &regex_syntax::ast::ClassSetItem,
+) -> regex_syntax::ast::ClassSetItem {
+    use regex_syntax::ast::{ClassBracketed, ClassSetItem, ClassSetUnion};
+    match item {
+        ClassSetItem::Perl(p) => ascii_perl_set_item(p.span, &p.kind, p.negated),
+        ClassSetItem::Union(u) => ClassSetItem::Union(ClassSetUnion {
+            span: u.span,
+            items: u.items.iter().map(rewrite_ascii_perl_item).collect(),
+        }),
+        ClassSetItem::Bracketed(b) => ClassSetItem::Bracketed(Box::new(ClassBracketed {
+            span: b.span,
+            negated: b.negated,
+            kind: rewrite_ascii_perl_set(&b.kind),
+        })),
+        other => other.clone(),
     }
 }
 
@@ -362,6 +470,86 @@ pub fn is_escapeable_character(c: char) -> bool {
 
 fn is_hex(c: char) -> bool {
     c.is_ascii_digit() || ('a'..='f').contains(&c) || ('A'..='F').contains(&c)
+}
+
+fn ensure_lookbehind_at_start(ast: &Ast, at_start: bool) -> core::result::Result<(), Span> {
+    match ast {
+        Ast::Concat(c) => {
+            let mut child_at_start = at_start;
+            for child in &c.asts {
+                ensure_lookbehind_at_start(child, child_at_start)?;
+                if ast_may_consume(child) {
+                    child_at_start = false;
+                }
+            }
+            Ok(())
+        }
+        Ast::Alternation(a) => {
+            for child in &a.asts {
+                ensure_lookbehind_at_start(child, at_start)?;
+            }
+            Ok(())
+        }
+        Ast::Intersection(i) => {
+            for child in &i.asts {
+                ensure_lookbehind_at_start(child, at_start)?;
+            }
+            Ok(())
+        }
+        Ast::Complement(c) => ensure_lookbehind_at_start(&c.ast, at_start),
+        Ast::Group(g) => ensure_lookbehind_at_start(&g.ast, at_start),
+        Ast::Repetition(r) => ensure_lookbehind_at_start(&r.ast, at_start),
+        Ast::Lookaround(g) => {
+            match g.kind {
+                LookaroundKind::PositiveLookbehind | LookaroundKind::NegativeLookbehind => {
+                    if !at_start {
+                        return Err(g.span);
+                    }
+                }
+                LookaroundKind::PositiveLookahead | LookaroundKind::NegativeLookahead => {}
+            }
+            ensure_lookbehind_at_start(&g.ast, true)
+        }
+        Ast::Empty(_)
+        | Ast::Flags(_)
+        | Ast::Literal(_)
+        | Ast::Dot(_)
+        | Ast::Top(_)
+        | Ast::Assertion(_)
+        | Ast::ClassUnicode(_)
+        | Ast::ClassPerl(_)
+        | Ast::ClassBracketed(_) => Ok(()),
+    }
+}
+
+fn ast_may_consume(ast: &Ast) -> bool {
+    match ast {
+        Ast::Empty(_) | Ast::Flags(_) | Ast::Assertion(_) | Ast::Lookaround(_) => false,
+        Ast::Literal(_)
+        | Ast::Dot(_)
+        | Ast::Top(_)
+        | Ast::ClassUnicode(_)
+        | Ast::ClassPerl(_)
+        | Ast::ClassBracketed(_) => true,
+        Ast::Group(g) => ast_may_consume(&g.ast),
+        Ast::Repetition(r) => {
+            if !ast_may_consume(&r.ast) {
+                return false;
+            }
+            match r.op.kind {
+                RepetitionKind::ZeroOrOne
+                | RepetitionKind::ZeroOrMore
+                | RepetitionKind::OneOrMore => true,
+                RepetitionKind::Range(ast::RepetitionRange::Exactly(0)) => false,
+                RepetitionKind::Range(ast::RepetitionRange::Bounded(_, 0)) => false,
+                RepetitionKind::Range(_) => true,
+            }
+        }
+        Ast::Alternation(a) => a.asts.iter().any(ast_may_consume),
+        Ast::Intersection(i) => i.asts.iter().any(ast_may_consume),
+        Ast::Complement(_) => true,
+        Ast::Concat(c) => c.asts.iter().any(ast_may_consume),
+    }
 }
 
 impl<'s> ResharpParser<'s> {
@@ -1260,9 +1448,8 @@ impl<'s> ResharpParser<'s> {
                 }
             }
             Ast::Lookaround(la) => match la.kind {
-                ast::LookaroundKind::PositiveLookahead | ast::LookaroundKind::PositiveLookbehind => {
-                    Self::word_char_kind(&la.ast, left)
-                }
+                ast::LookaroundKind::PositiveLookahead
+                | ast::LookaroundKind::PositiveLookbehind => Self::word_char_kind(&la.ast, left),
                 _ => Unknown,
             },
             _ => Unknown,
@@ -1399,8 +1586,9 @@ impl<'s> ResharpParser<'s> {
     fn is_transparent_for_dir(ast: &Ast, dir: isize) -> bool {
         match ast {
             Ast::Lookaround(la) => match la.kind {
-                ast::LookaroundKind::PositiveLookahead
-                | ast::LookaroundKind::NegativeLookahead => dir < 0,
+                ast::LookaroundKind::PositiveLookahead | ast::LookaroundKind::NegativeLookahead => {
+                    dir < 0
+                }
                 ast::LookaroundKind::PositiveLookbehind
                 | ast::LookaroundKind::NegativeLookbehind => dir > 0,
             },
@@ -1431,19 +1619,22 @@ impl<'s> ResharpParser<'s> {
         }
     }
 
-
-    fn specialize_word_boundaries(&mut self, children: &mut [NodeId], tb: &mut TB<'s>) {
+    fn specialize_word_boundaries(
+        &mut self,
+        children: &mut [NodeId],
+        tb: &mut TB<'s>,
+    ) -> Result<()> {
         let wb = self.unicode_classes.wb;
         let non_wb = self.unicode_classes.non_wb;
         if wb == NodeId::MISSING {
-            return;
+            return Ok(());
         }
         let word = self.unicode_classes.word;
         let non_word = self.unicode_classes.non_word;
         if word == NodeId::MISSING {
-            return;
+            return Ok(());
         }
-        // narrow check, could be done over the whole regex instead of one node 
+        // narrow check, could be done over the whole regex instead of one node
         // but i need to make sure the cost isnt too large
         let word_pref = tb.mk_concat(word, NodeId::TS);
         let non_word_pref = tb.mk_concat(non_word, NodeId::TS);
@@ -1461,8 +1652,10 @@ impl<'s> ResharpParser<'s> {
             } else {
                 Self::classify(tb, children[k + 1], word_pref, non_word_pref)
             };
-            children[k] = Self::rewrite_wb_in_node(tb, children[k], wb, non_wb, word, l, r);
+            children[k] = Self::rewrite_wb_in_node(tb, children[k], wb, non_wb, word, l, r)
+                .ok_or_else(|| self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex))?;
         }
+        Ok(())
     }
 
     fn rewrite_wb_in_node(
@@ -1473,29 +1666,38 @@ impl<'s> ResharpParser<'s> {
         word: NodeId,
         left: WordCharKind,
         right: WordCharKind,
-    ) -> NodeId {
+    ) -> Option<NodeId> {
         let boundary_match = if node == wb {
             true
         } else if node == non_wb {
             false
         } else if b.get_kind(node) == Kind::Union {
-            let l = Self::rewrite_wb_in_node(b, node.left(b), wb, non_wb, word, left, right);
-            let r = Self::rewrite_wb_in_node(b, node.right(b), wb, non_wb, word, left, right);
-            return b.mk_union(l, r);
+            let l = Self::rewrite_wb_in_node(b, node.left(b), wb, non_wb, word, left, right)?;
+            let r = Self::rewrite_wb_in_node(b, node.right(b), wb, non_wb, word, left, right)?;
+            return Some(b.mk_union(l, r));
         } else {
-            return node;
+            return Some(node);
         };
         use WordCharKind::*;
-        match (left, right) {
+        let result = match (left, right) {
             (NonWord, Word) | (Word, NonWord) => {
-                if boundary_match { NodeId::EPS } else { NodeId::BOT }
+                if boundary_match {
+                    NodeId::EPS
+                } else {
+                    NodeId::BOT
+                }
             }
             (Word, Word) | (NonWord, NonWord) => {
-                if boundary_match { NodeId::BOT } else { NodeId::EPS }
+                if boundary_match {
+                    NodeId::BOT
+                } else {
+                    NodeId::EPS
+                }
             }
             (Word, _) => {
-                if boundary_match { b.mk_neg_lookahead(word, 0) }
-                else {
+                if boundary_match {
+                    b.mk_neg_lookahead(word, 0)
+                } else {
                     let tail = b.mk_concat(word, NodeId::TS);
                     b.mk_lookahead(tail, NodeId::MISSING, 0)
                 }
@@ -1504,21 +1706,35 @@ impl<'s> ResharpParser<'s> {
                 if boundary_match {
                     let tail = b.mk_concat(word, NodeId::TS);
                     b.mk_lookahead(tail, NodeId::MISSING, 0)
-                } else { b.mk_neg_lookahead(word, 0) }
+                } else {
+                    b.mk_neg_lookahead(word, 0)
+                }
             }
             (_, Word) => {
-                if boundary_match { b.mk_neg_lookbehind(word) }
-                else { b.mk_lookbehind(word, NodeId::MISSING) }
+                if boundary_match {
+                    b.mk_neg_lookbehind(word)
+                } else {
+                    b.mk_lookbehind(word, NodeId::MISSING)
+                }
             }
             (_, NonWord) => {
-                if boundary_match { b.mk_lookbehind(word, NodeId::MISSING) }
-                else { b.mk_neg_lookbehind(word) }
+                if boundary_match {
+                    b.mk_lookbehind(word, NodeId::MISSING)
+                } else {
+                    b.mk_neg_lookbehind(word)
+                }
             }
-            _ => node,
-        }
+            _ => return None,
+        };
+        Some(result)
     }
 
-    fn classify(b: &mut TB<'s>, node: NodeId, word_dir: NodeId, non_word_dir: NodeId) -> WordCharKind {
+    fn classify(
+        b: &mut TB<'s>,
+        node: NodeId,
+        word_dir: NodeId,
+        non_word_dir: NodeId,
+    ) -> WordCharKind {
         if b.contains_look(node) || b.contains_anchors(node) {
             return WordCharKind::Unknown;
         }
@@ -1554,11 +1770,19 @@ impl<'s> ResharpParser<'s> {
         let boundary_match = !negated;
         match (left, right) {
             (NonWord, Word) | (Word, NonWord) => Ok((
-                if boundary_match { NodeId::EPS } else { NodeId::BOT },
+                if boundary_match {
+                    NodeId::EPS
+                } else {
+                    NodeId::BOT
+                },
                 idx + 1,
             )),
             (Word, Word) | (NonWord, NonWord) => Ok((
-                if boundary_match { NodeId::BOT } else { NodeId::EPS },
+                if boundary_match {
+                    NodeId::BOT
+                } else {
+                    NodeId::EPS
+                },
                 idx + 1,
             )),
             (Word, _) => {
@@ -1680,16 +1904,16 @@ impl<'s> ResharpParser<'s> {
                 ast::AssertionKind::WordBoundary => {
                     let only = Ast::Assertion(a.clone());
                     let asts = std::slice::from_ref(&only);
-                    let (node, _) = self
-                        .rewrite_word_boundary_in_concat(asts, 0, translator, tb, false)?;
+                    let (node, _) =
+                        self.rewrite_word_boundary_in_concat(asts, 0, translator, tb, false)?;
                     Ok(node)
                 }
                 ast::AssertionKind::NotWordBoundary => {
                     // bare \B with no surrounding concat: treat as singleton.
                     let only = Ast::Assertion(a.clone());
                     let asts = std::slice::from_ref(&only);
-                    let (node, _) = self
-                        .rewrite_word_boundary_in_concat(asts, 0, translator, tb, true)?;
+                    let (node, _) =
+                        self.rewrite_word_boundary_in_concat(asts, 0, translator, tb, true)?;
                     Ok(node)
                 }
                 ast::AssertionKind::StartLine => {
@@ -1773,10 +1997,15 @@ impl<'s> ResharpParser<'s> {
                     if !c.negated && is_universal_perl_pair(item) {
                         return Ok(NodeId::TOP);
                     }
+                    let kind = if self.global_ascii_perl {
+                        rewrite_ascii_perl_set(&c.kind)
+                    } else {
+                        c.kind.clone()
+                    };
                     let tmp = regex_syntax::ast::ClassBracketed {
                         span: c.span,
                         negated: c.negated,
-                        kind: c.kind.clone(),
+                        kind,
                     };
                     let orig_ast = regex_syntax::ast::Ast::class_bracketed(tmp);
                     self.translator_to_node_id(&orig_ast, translator, tb)
@@ -1911,8 +2140,9 @@ impl<'s> ResharpParser<'s> {
                                 || a.kind == ast::AssertionKind::NotWordBoundary =>
                         {
                             let negated = a.kind == ast::AssertionKind::NotWordBoundary;
-                            let node = self
-                                .rewrite_word_boundary_in_concat(&c.asts, i, translator, tb, negated)?;
+                            let node = self.rewrite_word_boundary_in_concat(
+                                &c.asts, i, translator, tb, negated,
+                            )?;
                             match prev_boundary_child {
                                 Some(idx) => children[idx] = tb.mk_inter(children[idx], node.0),
                                 None => {
@@ -1938,7 +2168,7 @@ impl<'s> ResharpParser<'s> {
                     }
                     i += 1;
                 }
-                self.specialize_word_boundaries(&mut children, tb);
+                self.specialize_word_boundaries(&mut children, tb)?;
                 Ok(tb.mk_concats(children.iter().cloned()))
             }
             Ast::Intersection(intersection) => {
@@ -2007,6 +2237,9 @@ impl<'s> ResharpParser<'s> {
 
     fn parse(&mut self, tb: &mut TB<'s>) -> Result<NodeId> {
         let ast = self.parse_inner()?;
+        if let Err(span) = ensure_lookbehind_at_start(&ast, true) {
+            return Err(self.error(span, ast::ErrorKind::UnsupportedResharpRegex));
+        }
         self.ast_to_node_id(&ast, &mut None, tb)
     }
 
@@ -2131,9 +2364,7 @@ impl<'s> ResharpParser<'s> {
         let over_limit = match &range {
             ast::RepetitionRange::Exactly(n) => *n > self.max_repeat,
             ast::RepetitionRange::AtLeast(n) => *n > self.max_repeat,
-            ast::RepetitionRange::Bounded(n, m) => {
-                *n > self.max_repeat || *m > self.max_repeat
-            }
+            ast::RepetitionRange::Bounded(n, m) => *n > self.max_repeat || *m > self.max_repeat,
         };
         if over_limit {
             return Err(self.error(op_span, ast::ErrorKind::UnsupportedResharpRegex));
@@ -2386,12 +2617,6 @@ impl<'s> ResharpParser<'s> {
                 lit.span.start = start;
                 return Ok(Primitive::Literal(lit));
             }
-            // '8'..='9' if !self.parser().octal => {
-            //     return Err(self.error(
-            //         Span::new(start, self.span_char().end),
-            //         ast::ErrorKind::UnsupportedBackreference,
-            //     ));
-            // }
             'x' | 'u' | 'U' => {
                 let mut lit = self.parse_hex()?;
                 lit.span.start = start;

@@ -225,3 +225,39 @@ pattern = '\\(\d{1,3}|x[a-fA-F0-9]+|u[a-fA-F0-9]{1,4}|.|\n)'
 input = "xxxxx\\!yyyyy"
 matches = [[5, 7]]
 
+[[test]]
+name = "both_sided_optional_padding_ws"
+pattern = '\s*\S+\s*'
+input = "aa bb cc dd ee"
+matches = [[0, 3], [3, 6], [6, 9], [9, 12], [12, 14]]
+
+[[test]]
+name = "both_sided_optional_padding_space"
+pattern = ' *[^ ]+ *'
+input = "aa bb cc dd ee"
+matches = [[0, 3], [3, 6], [6, 9], [9, 12], [12, 14]]
+
+[[test]]
+name = "convergence_variable_gap_px"
+pattern = 'P.*X|Q.*Y'
+input = "P_X"
+matches = [[0, 3]]
+
+[[test]]
+name = "convergence_variable_gap_px_short"
+pattern = 'P.*X|Q.*Y'
+input = "PX"
+matches = [[0, 2]]
+
+[[test]]
+name = "convergence_variable_gap_qy"
+pattern = 'P.*X|Q.*Y'
+input = "QzzY"
+matches = [[0, 4]]
+
+[[test]]
+name = "convergence_variable_gap_py"
+pattern = 'P.*X|Q.*Y'
+input = "P_Y"
+matches = []
+

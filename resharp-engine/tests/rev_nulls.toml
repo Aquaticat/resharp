@@ -10,6 +10,54 @@ input = "11"
 rev_nulls = [0]
 
 [[test]]
+name = "digit_trailing_boundary_before_nonword"
+pattern = '\d+\b'
+input = " 2)"
+rev_nulls = [1]
+
+[[test]]
+name = "digit_wrapped_boundary_before_nonword"
+pattern = '\b\d+\b'
+input = " 2)"
+rev_nulls = [1]
+
+[[test]]
+name = "digit_star_digit_boundary_before_nonword"
+pattern = '\d*\d+\b'
+input = " 2)"
+rev_nulls = [1]
+
+[[test]]
+name = "neg_word_lookbehind_digit_star_digit_boundary_before_nonword"
+pattern = '(?<!\w)\d*\d+\b'
+input = " 2)"
+rev_nulls = [1]
+
+[[test]]
+name = "literal_lookahead_alt_star_plus"
+pattern = '(?:(?=b)|-)b*b+'
+input = " b"
+rev_nulls = [1]
+
+[[test]]
+name = "literal_star_plus_neg_lookahead"
+pattern = 'b*b+(?!b)'
+input = " b)"
+rev_nulls = [1]
+
+[[test]]
+name = "literal_lookahead_star_plus_neg_lookahead"
+pattern = '(?=b)b*b+(?!b)'
+input = " b)"
+rev_nulls = [1]
+
+[[test]]
+name = "literal_alt_star_plus_neg_lookahead"
+pattern = '(?:b|-)b*b+(?!b)'
+input = " b)"
+rev_nulls = []
+
+[[test]]
 name = "sorted_space_class_space"
 pattern = ' [A-Z][a-z]+ '
 input = " Hello World Foo "
@@ -43,19 +91,19 @@ rev_nulls = [1, 0]
 name = "dotstar_lookahead_aaa_long"
 pattern = '.*(?=aaa)'
 input = "bbbbbbbbbbaaa"
-rev_nulls = [10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 0]
+rev_nulls = [10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
 
 [[test]]
 name = "dotstar_lookahead_chained_short"
 pattern = '.*(?=.*bbb)(?=.*ccc)'
 input = "aaa bbb ccc"
-rev_nulls = [4, 3, 2, 1, 0, 0]
+rev_nulls = [4, 3, 2, 1, 0]
 
 [[test]]
 name = "dotstar_lookahead_chained_long"
 pattern = '.*(?=.*bbb)(?=.*ccc)'
 input = "aaaaaaaaaa bbb aaaaaaaaaa ccc"
-rev_nulls = [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 0]
+rev_nulls = [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
 
 [[test]]
 name = "lookahead_word_boundary"

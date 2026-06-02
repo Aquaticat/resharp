@@ -86,12 +86,16 @@ fn test_stream_chunk() {
     }
 }
 
-
 #[test]
 fn seek_fwd_rev_cursor() {
     let re = Regex::new("a[bc]+d").unwrap();
     let input = b"xx abcd yy abbcd zz acd ww abd";
-    let stream_matches: Vec<(usize, usize)> = re.stream(input).unwrap().iter().map(|m| (m.start, m.end)).collect();
+    let stream_matches: Vec<(usize, usize)> = re
+        .stream(input)
+        .unwrap()
+        .iter()
+        .map(|m| (m.start, m.end))
+        .collect();
 
     let mut fwd: Vec<usize> = Vec::new();
     let (mut s, mut p) = (Regex::SEEK_INITIAL, 0usize);
@@ -120,7 +124,10 @@ fn seek_fwd_from_middle() {
     let re = Regex::new("lookaround").unwrap();
     let input = b"foo lookaround bar baz lookaround qux end";
     let mid = 20;
-    let (_, end) = re.seek_fwd(input, Regex::SEEK_INITIAL, mid).unwrap().unwrap();
+    let (_, end) = re
+        .seek_fwd(input, Regex::SEEK_INITIAL, mid)
+        .unwrap()
+        .unwrap();
     assert_eq!(end, 33);
     assert_eq!(&input[end - 10..end], b"lookaround");
 }
@@ -130,7 +137,10 @@ fn seek_rev_from_middle() {
     let re = Regex::new("lookaround").unwrap();
     let input = b"foo lookaround bar baz lookaround qux end";
     let mid = 20;
-    let (_, start) = re.seek_rev(input, Regex::SEEK_INITIAL, mid).unwrap().unwrap();
+    let (_, start) = re
+        .seek_rev(input, Regex::SEEK_INITIAL, mid)
+        .unwrap()
+        .unwrap();
     assert_eq!(start, 4);
     assert_eq!(&input[start..start + 10], b"lookaround");
 }
@@ -139,8 +149,14 @@ fn seek_rev_from_middle() {
 fn seek_no_match() {
     let re = Regex::new("zzz").unwrap();
     let input = b"the quick brown fox jumps over the lazy dog";
-    assert!(re.seek_fwd(input, Regex::SEEK_INITIAL, 10).unwrap().is_none());
-    assert!(re.seek_rev(input, Regex::SEEK_INITIAL, 30).unwrap().is_none());
+    assert!(re
+        .seek_fwd(input, Regex::SEEK_INITIAL, 10)
+        .unwrap()
+        .is_none());
+    assert!(re
+        .seek_rev(input, Regex::SEEK_INITIAL, 30)
+        .unwrap()
+        .is_none());
 }
 
 #[test]
@@ -151,7 +167,10 @@ fn seek_fwd_skips_match_before_pos() {
     assert_eq!(end, 9);
     let (_, end) = re.seek_fwd(input, Regex::SEEK_INITIAL, 5).unwrap().unwrap();
     assert_eq!(end, 19);
-    assert!(re.seek_fwd(input, Regex::SEEK_INITIAL, 20).unwrap().is_none());
+    assert!(re
+        .seek_fwd(input, Regex::SEEK_INITIAL, 20)
+        .unwrap()
+        .is_none());
 }
 
 #[test]

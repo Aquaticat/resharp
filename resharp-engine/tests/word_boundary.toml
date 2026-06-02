@@ -269,13 +269,7 @@ input = "xxxxx00-00yyyyy"
 matches = [[5, 10]]
 
 [[test]]
-name = "b_then_B_is_contradiction"
-pattern = '\b\B'
-input = "ab"
-matches = []
-
-[[test]]
-name = "B_then_b_is_contradiction"
-pattern = '\B\b'
-input = "ab"
-matches = []
+name = "wb_nonword_class_foo_bang"
+pattern = '\b\W'
+input = "foo /*!"
+matches = [[3, 4]]

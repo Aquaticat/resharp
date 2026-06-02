@@ -26,9 +26,13 @@ pub struct EngineCase {
     #[serde(default)]
     pub anchored: bool,
     #[serde(default)]
+    pub ascii: bool,
+    #[serde(default)]
     pub vs_regex: bool,
     #[serde(default)]
     pub vs_find_all: bool,
+    #[serde(default)]
+    pub supported: Option<bool>,
     #[serde(default)]
     pub reason: Option<String>,
 }
@@ -47,7 +51,7 @@ pub struct InternalCase {
     #[serde(default)]
     pub name: String,
     pub pattern: String,
-    pub pp: String,
+    pub pp: Option<String>,
     pub ts_rev: Option<String>,
 }
 

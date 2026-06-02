@@ -139,3 +139,39 @@ name = "unanchored_fwd_date"
 pattern = '\d{4}-\d\d?-\d\d?((T| )\d{2}:\d{2}:\d{2})?'
 input = "0000-0-0 0000-0-0"
 matches = [[0, 8], [9, 17]]
+
+[[test]]
+name = "alt_interior_span"
+pattern = 'x|span|p|a'
+input = "span"
+matches = [[0, 4]]
+
+[[test]]
+name = "alt_interior_abcd"
+pattern = 'x|abcd|b|c'
+input = "abcd"
+matches = [[0, 4]]
+
+[[test]]
+name = "alt_interior_spanpa"
+pattern = 'x|span|p|a'
+input = "spanpa"
+matches = [[0, 4], [4, 5], [5, 6]]
+
+[[test]]
+name = "alt_interior_long_span"
+pattern = 'input|textarea|div|span|p|a'
+input = "span"
+matches = [[0, 4]]
+
+[[test]]
+name = "alt_a_aa"
+pattern = 'a|aa'
+input = "aa"
+matches = [[0, 2]]
+
+[[test]]
+name = "alt_foo_bar"
+pattern = 'foo|bar'
+input = "xfooybar"
+matches = [[1, 4], [5, 8]]

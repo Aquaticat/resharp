@@ -703,12 +703,8 @@ impl Regex {
             Some(p) if p.is_literal() => {
                 bdfa_scan::<{ Prefix::Literal as u8 }, true>(bounded, b, input, matches_buf)?
             }
-            Some(_) => {
-                bdfa_scan::<{ Prefix::Search as u8 }, true>(bounded, b, input, matches_buf)?
-            }
-            None => {
-                bdfa_scan::<{ Prefix::None as u8 }, true>(bounded, b, input, matches_buf)?
-            }
+            Some(_) => bdfa_scan::<{ Prefix::Search as u8 }, true>(bounded, b, input, matches_buf)?,
+            None => bdfa_scan::<{ Prefix::None as u8 }, true>(bounded, b, input, matches_buf)?,
         };
         Ok(found)
     }

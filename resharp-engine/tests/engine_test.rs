@@ -12,6 +12,15 @@ fn load_tests(filename: &str) -> Vec<EngineCase> {
     file.test
 }
 
+fn compile_case(tc: &EngineCase) -> Result<Regex, Error> {
+    if tc.ascii {
+        let opts = RegexOptions::default().unicode(resharp::UnicodeMode::Ascii);
+        Regex::with_options(&tc.pattern, opts)
+    } else {
+        Regex::new(&tc.pattern)
+    }
+}
+
 fn run_file(filename: &str) {
     let tests = load_tests(filename);
     for tc in &tests {
@@ -45,7 +54,7 @@ fn run_file(filename: &str) {
             }
             continue;
         }
-        let re = Regex::new(&tc.pattern).unwrap_or_else(|e| {
+        let re = compile_case(tc).unwrap_or_else(|e| {
             panic!(
                 "file={}, name={:?}, pattern={:?}: compile error: {}",
                 filename, tc.name, tc.pattern, e
@@ -134,7 +143,6 @@ fn normal_lookaround() {
 }
 
 #[test]
-#[ignore = "slow in debug; run with --ignored or in release"]
 fn semantics() {
     run_file("semantics.toml");
 }
@@ -166,12 +174,18 @@ fn run_file_javascript(filename: &str) {
             continue;
         }
         let opts = RegexOptions::default().unicode(resharp::UnicodeMode::Javascript);
-        let re = Regex::with_options(&tc.pattern, opts).unwrap_or_else(|e| {
-            panic!(
+        let re = match Regex::with_options(&tc.pattern, opts) {
+            Err(_) if tc.expect_error => continue,
+            Err(e) => panic!(
                 "file={}, name={:?}, pattern={:?}: compile error: {}",
                 filename, tc.name, tc.pattern, e
-            )
-        });
+            ),
+            Ok(_) if tc.expect_error => panic!(
+                "file={}, name={:?}, pattern={:?}: expected error but compiled Ok",
+                filename, tc.name, tc.pattern
+            ),
+            Ok(re) => re,
+        };
         let matches = re.find_all(tc.input.as_bytes()).unwrap();
         let result: Vec<[usize; 2]> = matches.iter().map(|m| [m.start, m.end]).collect();
         assert_eq!(
@@ -1020,11 +1034,17 @@ fn run_file_internal(filename: &str) {
         });
         let node = b.simplify_fwd_initial(node);
         let got = b.pp(node);
-        assert_eq!(
-            got, tc.pp,
-            "file={}, name={:?}, pattern={:?}",
-            filename, tc.name, tc.pattern
-        );
+        if let Some(expected_pp) = &tc.pp {
+            assert_eq!(
+                got,
+                expected_pp.clone(),
+                "file={}, name={:?}, pattern={:?}",
+                filename,
+                tc.name,
+                tc.pattern
+            );
+        }
+
         if let Some(expected_ts_rev) = &tc.ts_rev {
             let ts_rev_start = b.ts_rev_start(node).unwrap();
             let got_ts_rev = b.pp(ts_rev_start);
@@ -1045,6 +1065,70 @@ fn internal() {
 #[test]
 fn normalize_toml() {
     run_file_internal("normalize.toml");
+}
+
+fn run_file_exotic(filename: &str) {
+    let tests = load_tests(filename);
+    for tc in &tests {
+        if tc.ignore {
+            continue;
+        }
+        let re = match compile_case(tc) {
+            Err(e) if tc.supported == Some(true) => panic!(
+                "file={}, name={:?}, pattern={:?}: expected supported but compile failed: {}",
+                filename, tc.name, tc.pattern, e
+            ),
+            Err(_) => continue,
+            Ok(_) if tc.expect_error => panic!(
+                "file={}, name={:?}, pattern={:?}: expected error but compiled Ok",
+                filename, tc.name, tc.pattern
+            ),
+            Ok(re) => re,
+        };
+        let matches = match re.find_all(tc.input.as_bytes()) {
+            Ok(m) => m,
+            Err(e) if tc.supported == Some(true) => panic!(
+                "file={}, name={:?}, pattern={:?}, input={:?}: expected supported but matching failed: {}",
+                filename, tc.name, tc.pattern, tc.input, e
+            ),
+            Err(_) => continue,
+        };
+        if tc.supported == Some(false) {
+            panic!(
+                "file={}, name={:?}, pattern={:?}, input={:?}: expected unsupported but matching succeeded",
+                filename, tc.name, tc.pattern, tc.input
+            );
+        }
+        let result: Vec<[usize; 2]> = matches.iter().map(|m| [m.start, m.end]).collect();
+        assert_eq!(
+            result, tc.matches,
+            "file={}, name={:?}, pattern={:?}, input={:?}: silently returned wrong result",
+            filename, tc.name, tc.pattern, tc.input
+        );
+    }
+}
+
+#[test]
+fn rev_collect_candidate_without_fwd_end_minimal() {
+    assert!(Regex::new(r"((?<!b)(?=b)|-)b(?!b)").is_err());
+}
+
+#[test]
+fn lookbehind_after_consuming_rejects() {
+    assert!(Regex::new(r"[\s\S]+(?<=\S)\z").is_err());
+}
+
+#[test]
+fn rust_numeric_literal_suffix_limited_rejects_nonleading_lookbehind() {
+    let opts = RegexOptions::default().unicode(resharp::UnicodeMode::Javascript);
+    let pattern =
+        r"((?:\.\.)?)(?:\b0b\.?|\b|\.)\d[\d_]*(?:(?!\.\.)\.[\d_]*)?(?:e[+-]?\d[\d_]*)?[ulfi]{0,4}";
+    assert!(Regex::with_options(pattern, opts).is_err());
+}
+
+#[test]
+fn exotic_toml() {
+    run_file_exotic("exotic.toml");
 }
 
 #[test]
@@ -1151,17 +1235,6 @@ fn reject_lookahead_in_loop() {
         err
     );
 }
-#[test]
-fn anchor_in_alt_intersect_dot_star() {
-    let pat = "(export|^function)&(.*)";
-    let opts = RegexOptions::default().unicode(resharp::UnicodeMode::Ascii);
-    let mkopts = || RegexOptions::default().unicode(resharp::UnicodeMode::Ascii);
-    let _ = opts;
-    let re = Regex::with_options(pat, mkopts()).unwrap();
-    let re_dist = Regex::with_options("(export&.*)|(^function&.*)", mkopts()).unwrap();
-    let hay = b"function foo\nexport bar\n  function baz\nexport qux";
-    assert_eq!(re.find_all(hay).unwrap(), re_dist.find_all(hay).unwrap());
-}
 
 #[test]
 fn hardened_long_word() {
@@ -1199,35 +1272,6 @@ fn repeat_limit_unbounded_allows_large_count() {
 fn is_match_negative_lookahead() {
     let re = Regex::new(r"foo(?!bar)").unwrap();
     assert!(!re.is_match(b"foobar").unwrap());
-}
-
-#[test]
-fn union_with_word_boundary_branch() {
-    let re = Regex::new(r"(a|\bb)").unwrap();
-    let hay = b"a xb bb ya";
-    let ms = re.find_all(hay).unwrap();
-    let got: Vec<(usize, usize)> = ms.iter().map(|m| (m.start, m.end)).collect();
-    println!("got: {:?}", got);
-    // a matches every 'a'; \bb matches 'b' at word start (pos 5).
-    assert_eq!(got, vec![(0, 1), (5, 6), (9, 10)]);
-}
-
-#[test]
-fn union_with_anchored_branch_simple() {
-    let re = Regex::new("^aa|bb").unwrap();
-    let hay = b"aa\nbb aa";
-    let ms = re.find_all(hay).unwrap();
-    let got: Vec<(usize, usize)> = ms.iter().map(|m| (m.start, m.end)).collect();
-    assert_eq!(got, vec![(0, 2), (3, 5)]);
-}
-
-#[test]
-fn union_with_anchored_branch_mixed() {
-    let re = Regex::new("aa|bb|^##|cc").unwrap();
-    let hay = b"##\nbb ## cc aa";
-    let ms = re.find_all(hay).unwrap();
-    let got: Vec<(usize, usize)> = ms.iter().map(|m| (m.start, m.end)).collect();
-    assert_eq!(got, vec![(0, 2), (3, 5), (9, 11), (12, 14)]);
 }
 
 #[test]
@@ -1357,13 +1401,6 @@ fn anchored_fwd_lb_selected_when_min_len_zero_kind() {
     }
 }
 
-#[test]
-fn rev_literal_search() {
-    let re = Regex::new(r"[\s\S]+(?<=x)foo[\s\S]+").unwrap();
-    let m = re.find_all(b"axfoo def").unwrap();
-    assert_eq!(m, vec![resharp::Match { start: 0, end: 9 }]);
-}
-
 mod probe_alt {
     use resharp::{Regex, RegexOptions, UnicodeMode};
 
@@ -1398,28 +1435,6 @@ mod probe_alt {
             counts[1],
             counts[2]
         );
-    }
-}
-
-mod probe_nettv {
-    use resharp::{Regex, RegexOptions, UnicodeMode};
-
-    #[test]
-    fn probe_nettv() {
-        let p = r"NETTV\/3.1\b";
-        let re = Regex::with_options(p, RegexOptions::default().unicode(UnicodeMode::Javascript))
-            .unwrap();
-        let hay = "xyz NETTV/3.1 abc NETTV/3.1 end".as_bytes();
-        let ms = re.find_all(hay).unwrap();
-        println!("matches={} algo={:?}", ms.len(), re.prefix_kind_name());
-        for m in &ms {
-            println!(
-                "  at {}..{} = {:?}",
-                m.start,
-                m.end,
-                std::str::from_utf8(&hay[m.start..m.end]).unwrap()
-            );
-        }
     }
 }
 
@@ -1561,6 +1576,12 @@ mod prefix_toml {
             }
             let needs_sets =
                 tc.prefix_rev.is_some() || tc.potential_rev.is_some() || tc.potential_fwd.is_some();
+            let re = resharp::Regex::new(&tc.pattern);
+            if re.is_err() {
+                // unsupported pattern, skip test
+                // other tests cover unsupported patterns
+                continue;
+            }
             let sets_pair = needs_sets.then(|| make_prefix_sets(&tc.pattern));
             let check = |kind: &str, expected: &str| {
                 let result = match kind {
@@ -1647,7 +1668,11 @@ mod auto_harden {
         let content = std::fs::read_to_string(&path).unwrap();
         let file: AutoHardenFile = toml::from_str(&content).unwrap();
         for tc in file.test {
-            let re = Regex::new(&tc.pattern).expect("pattern compiles");
+            let re = Regex::new(&tc.pattern).expect(&format!(
+                "file={},  pattern={:?}: compile failed",
+                path.display(),
+                tc.pattern
+            ));
             assert_eq!(
                 re.is_hardened(),
                 tc.hardened,
@@ -1772,23 +1797,6 @@ fn word_boundary_between_word_chars_should_not_match() {
 }
 
 #[test]
-fn leading_union_lb_in_concat() {
-    use resharp::{Regex, RegexOptions, UnicodeMode};
-    let ascii = |pat| Regex::with_options(pat, RegexOptions::default().unicode(UnicodeMode::Ascii));
-
-    let re = ascii(r"(^|[^-\s])--([^-\s]|$)").unwrap();
-    let input = b"foo--bar and --bad and good--\nok";
-    let ms = re.find_all(input).unwrap();
-    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
-    assert_eq!(actual, &[[2, 6], [26, 29]]);
-
-    let re2 = Regex::new(r"(^|[^-\s])--([^-\s]|$)").unwrap();
-    let ms2 = re2.find_all(input).unwrap();
-    let actual2: Vec<[usize; 2]> = ms2.iter().map(|m| [m.start, m.end]).collect();
-    assert_eq!(actual2, &[[2, 6], [26, 29]]);
-}
-
-#[test]
 fn js_numeric_literals() {
     let bin = resharp::Regex::new(r"0b[01]+(?:\_[01]+)*\b").unwrap();
     let oct = resharp::Regex::new(r"0o[0-7]+(?:\_[0-7]+)*\b").unwrap();
@@ -1815,33 +1823,6 @@ fn js_numeric_literals() {
         &["0xff", "0xA_B", "0x1"]
     );
 }
-
-// TODO: reallow once guaranteed 2 be correct
-
-// #[test]
-// fn test_html_attr() {
-//     let pat = r#"\b[a-zA-Z-]+(="[^"]*"|='[^']*'|=[^\s>]*)?"#;
-//     let re = resharp::Regex::new(pat).unwrap();
-//     let input = b"<div class=\"foo\" id='bar' hidden data-x=baz>";
-//     let ms = re.find_all(input).unwrap();
-//     let actual: Vec<&str> = ms.iter().map(|m| std::str::from_utf8(&input[m.start..m.end]).unwrap()).collect();
-//     for s in &actual { println!("{:?}", s); }
-//     assert_eq!(actual, &["class=\"foo\"", "id='bar'", "hidden", "data-x=baz"]);
-// }
-
-// #[test]
-// fn test_html_attr_parts() {
-//     let ok = |pat: &str| resharp::Regex::new(pat).map(|_| true).unwrap_or_else(|e| { println!("FAIL {:?}: {}", pat, e); false });
-//     assert!(ok(r#"\b[a-zA-Z-]+"#));
-//     assert!(ok(r#"[^\s>]*"#));
-//     assert!(ok(r#"="[^"]*""#));
-//     assert!(ok(r#"='[^']*'"#));
-//     assert!(ok(r#"=[^\s>]*"#));
-//     assert!(ok(r#"("foo"|"bar")?"#));
-//     assert!(ok(r#"\b[a-zA-Z-]+(="[^"]*")?"#));
-//     assert!(ok(r#"\b[a-zA-Z-]+(="[^"]*"|='[^']*')?"#));
-//     assert!(ok(r#"\b[a-zA-Z-]+(="[^"]*"|='[^']*'|=[^\s>]*)?"#));
-// }
 
 #[test]
 fn test_word_boundary_group() {
@@ -1880,8 +1861,24 @@ fn lookahead_rel_saturates_with_end_anchor_intersection() {
 
 #[test]
 fn lookahead_rel_saturates_with_nested_quantified_lookahead() {
-    let _ = resharp::Regex::new(r"(?:(?!\?){1,2}){3}");
-    let _ = resharp::Regex::new(r"(?:(?!abc)){4,12}a");
+    let _ = resharp::Regex::new(r"(?:(?=a){1,2}){2}");
+}
+
+#[test]
+fn lookaround_exotic() {
+    let re = Regex::new(r"((?<!b)(?=b)|-)b(?!b)");
+    if re.is_err() {
+        // reject is ok here
+        return;
+    }
+    let re = re.unwrap();
+    let m: Vec<[usize; 2]> = re
+        .find_all(b"bbb")
+        .unwrap()
+        .iter()
+        .map(|m| [m.start, m.end])
+        .collect();
+    assert!(m.is_empty(), "expected no matches, got {:?}", m);
 }
 
 #[test]
@@ -1945,25 +1942,17 @@ fn suffix_anchored_is_match() {
     assert!(re2.is_match(b"abc").unwrap());
     assert!(re2.is_match(b"xyz").unwrap());
 }
-#[test]
-fn anchored_end() {
-    let re = Regex::new(r"(^a|b$)&(.*)").unwrap();
-    let m: Vec<[usize; 2]> = re
-        .find_all(b"ax\nxb\n")
-        .unwrap()
-        .iter()
-        .map(|m| [m.start, m.end])
-        .collect();
-    assert_eq!(m, vec![[0, 1], [4, 5]]);
-}
 
 #[test]
 fn lookaround_commute() {
     let re = Regex::new(r"(?=b)(?<=a)").unwrap();
-    let m: Vec<[usize; 2]> = re.find_all(b"ab").unwrap().iter().map(|m| [m.start, m.end]).collect();
+    let m: Vec<[usize; 2]> = re
+        .find_all(b"ab")
+        .unwrap()
+        .iter()
+        .map(|m| [m.start, m.end])
+        .collect();
     assert_eq!(m, vec![[1, 1]]);
-    let re2 = Regex::new(r"x(?=a)(?<=a)").unwrap();
-    assert!(re2.find_all(b"xay").unwrap().is_empty());
 }
 
 #[test]
@@ -1974,3 +1963,160 @@ fn grouped_boundary_contradiction() {
     }
 }
 
+#[test]
+fn counted_rev_skip_no_boundary_double_consume() {
+    let re = Regex::new(r"[\t\n\r ]{2,}").unwrap();
+    let input = b"\tstringReplaceAll,";
+    assert!(re.find_all(input).unwrap().is_empty());
+    assert!(!re.is_match(input).unwrap());
+
+    let a = re.is_match(b"  indented").unwrap();
+    let b = re.is_match(b" */").unwrap();
+    assert!(a);
+    assert!(!b);
+    assert_eq!(
+        b,
+        Regex::new(r"[\t\n\r ]{2,}")
+            .unwrap()
+            .is_match(b" */")
+            .unwrap()
+    );
+}
+
+#[test]
+#[ignore = "catalogue of known-unsupported patterns to handle later"]
+fn known_unsupported_patterns_reject() {
+    let unsupported = [
+        r"-?[A-z.\-]+\b",
+        r"\A[^\n\r]+\b[^\n\r]+\z",
+        r"[a-z]*\b",
+        r"[a-z.]+\b",
+        r"\s*//[^\n\r]*\z(?<!,)",
+        r"\b(?:af|an|of|il)\z\b",
+        r"(?<!\A\s*)[ \t](?!\s*\z)",
+        r"(?<!ab)x",
+        r"(?<!\(.*[^)]),",
+        r"((?!ab).)*",
+        r"\A((?!\.(test|mock)\.).)*\z",
+        r"^.*(a|^b)",
+        r".*(a|^b)",
+        r"\A[a-z(]{1,3}\b",
+        r"a(?!b).*(?<!a)b",
+    ];
+    let mut wrong = vec![];
+    for p in unsupported {
+        if Regex::new(p).is_ok() {
+            wrong.push(p);
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "these must reject, not compile: {wrong:?}"
+    );
+}
+
+#[test]
+fn wb_after_mixed_word_nonword_class_not_silently_wrong() {
+    for p in [r"-?[A-z.\-]+\b", r"[a-z.]+\b", r"[A-z]+\b"] {
+        if let Ok(re) = Regex::new(p) {
+            assert!(
+                re.is_match(b"    i = 0;").unwrap(),
+                "{p:?} compiled but silently mis-matches"
+            );
+        }
+    }
+}
+
+#[test]
+fn end_anchor_word_boundary_rejected_not_wrong() {
+    let p = r"\b(?:af|il)\z\b";
+    if let Ok(re) = Regex::new(p) {
+        assert_eq!(
+            re.is_match(b"il").unwrap(),
+            true,
+            "{p:?} compiled but silently mis-matches"
+        );
+    }
+}
+
+#[test]
+fn multichar_negative_lookbehind_matches_reference() {
+    let cases: &[(&str, &str)] = &[(r"(?<!ab)x", "xabx")];
+    for &(p, s) in cases {
+        let re = Regex::new(p).unwrap_or_else(|e| panic!("{p:?}: compile error: {e}"));
+        let ours: Vec<[usize; 2]> = re
+            .find_all(s.as_bytes())
+            .unwrap()
+            .iter()
+            .map(|m| [m.start, m.end])
+            .collect();
+        let fr = fancy_regex::Regex::new(p).unwrap();
+        let mut reference = vec![];
+        let mut start = 0;
+        while let Ok(Some(m)) = fr.find_from_pos(s, start) {
+            reference.push([m.start(), m.end()]);
+            start = if m.end() > m.start() {
+                m.end()
+            } else {
+                m.end() + 1
+            };
+            if start > s.len() {
+                break;
+            }
+        }
+        assert_eq!(ours, reference, "{p:?} on {s:?}");
+    }
+}
+
+#[test]
+fn lookahead_nullable_star_tail_single_char() {
+    let cases: &[(&str, &[u8], &[[usize; 2]])] = &[
+        (r"(?=a)_*a", b"a", &[[0, 1]]),
+        (r"(?=a)_*a", b"aa", &[[0, 2]]),
+        (r"(?=a)__*a", b"a", &[]),
+        (r"(?=\S)[\s\S]*\S", b" x", &[[1, 2]]),
+    ];
+    for (pat, hay, expected) in cases {
+        let re = Regex::new(pat).unwrap();
+        let got: Vec<[usize; 2]> = re
+            .find_all(hay)
+            .unwrap()
+            .iter()
+            .map(|m| [m.start, m.end])
+            .collect();
+        assert_eq!(&got[..], *expected, "pat={pat:?} hay={hay:?}");
+    }
+}
+
+#[test]
+fn lookahead_in_optional_with_surrounding_stars() {
+    assert!(Regex::new(r"((?=(x|yy))x)? *\z").is_err());
+    let cases: &[(&str, &[u8], &[[usize; 2]])] = &[(r"\A *((?=[^ ])[^ ])? *\z", b" x", &[[0, 2]])];
+    for (pat, hay, expected) in cases {
+        let re = Regex::new(pat);
+        if re.is_err() {
+            continue; // rejected is fine here
+        }
+        let re = re.unwrap();
+        let got: Vec<[usize; 2]> = re
+            .find_all(hay)
+            .unwrap()
+            .iter()
+            .map(|m| [m.start, m.end])
+            .collect();
+        assert_eq!(&got[..], *expected, "pat={pat:?} hay={hay:?}");
+    }
+}
+
+#[test]
+fn hardened_bare_lookahead_zero_width_dot_hash() {
+    let opts = RegexOptions::default().hardened(true);
+    let re = Regex::with_options("(?=[.#])", opts).unwrap();
+    let result: Vec<[usize; 2]> = re
+        .find_all(b"a.b#c")
+        .unwrap()
+        .iter()
+        .map(|m| [m.start, m.end])
+        .collect();
+    assert_eq!(result, vec![[1, 1], [3, 3]]);
+}

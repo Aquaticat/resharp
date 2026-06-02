@@ -1,0 +1,635 @@
+description = '''
+these patterns are outside of RE# supported fragment
+could be supported but depends how much headache it is worth.
+either Unsupported or correct result is acceptable.
+
+below are some useful ones that are used in practice.
+'''
+
+[[test]]
+name = "simple_union_lb"
+pattern = '^aaa|bb'
+input = "aaaxbbx\naaa"
+matches = [[0, 3],[4, 6],[8, 11]]
+supported = true
+
+[[test]]
+name = "simple_union_lb_2"
+pattern = '^aaa|aaaaaa'
+input = "aaax\naaaaaa"
+matches = [[0, 3],[5, 11]]
+supported = false
+
+
+[[test]]
+name = "lb_la_or_dash_b_neg_la_no_match"
+pattern = '((?<!b)(?=b)|-)b(?!b)'
+input = "bbb"
+matches = []
+supported = false
+
+[[test]]
+name = "lb_la_or_dash_b_neg_la_no_match"
+pattern = '((?<!b)(?=b)|-)b(?!b)'
+input = "xxxxx-bbbbb"
+matches = []
+
+[[test]]
+name = "lb_la_or_dash_b_neg_la_match_end"
+pattern = '((?<!b)(?=b)|-)b(?!b)'
+input = "xxxxx-b"
+matches = [[5, 7]]
+
+[[test]]
+name = "wb_dash_counted_dash0"
+pattern = '(?:\b|-)([0-9]{1,2}[0]?|100)\b'
+input = "xxxxx-0yyyyy"
+matches = []
+
+[[test]]
+name = 'end_anchor_then_trailing_lookbehind_match'
+pattern = '\z(?<!,)'
+input = 'abc'
+matches = [[3, 3]]
+supported = true
+
+[[test]]
+name = 'end_anchor_then_trailing_lookbehind_blocked'
+pattern = '\z(?<!,)'
+input = 'ab,'
+matches = []
+
+[[test]]
+name = 'end_anchor_then_trailing_lookbehind_empty'
+pattern = '\z(?<!,)'
+input = ''
+matches = [[0, 0]]
+
+[[test]]
+name = 'end_anchor_then_trailing_lookbehind_then_consume_bot'
+pattern = '\z(?<!,)b'
+input = 'abc'
+matches = []
+
+[[test]]
+name = "wb_neg_newline_class_foo"
+pattern = '\b[^\n]'
+input = "foo /*!"
+ascii = true
+matches = [[0, 1], [3, 4]]
+
+[[test]]
+name = "exact_string"
+pattern = '^\A([^\: \t]+):\s*(.+)\z'
+input = "\n:!"
+matches = [[0, 3]]
+
+[[test]]
+name = 'anchored_end_intersect_dotstar'
+pattern = '(^a|b$)&(.*)'
+input = "ax\nxb\n"
+matches = [[0, 1], [4, 5]]
+
+[[test]]
+name = 'word_boundary_optional_sign_zero'
+pattern = '\b[\-\+]?0\b'
+input = '0 -0 +0'
+matches = [[0, 1], [3, 4], [6, 7]]
+
+[[test]]
+name = "b_then_B_is_contradiction"
+pattern = '\b\B'
+input = "ab"
+matches = []
+
+[[test]]
+name = "B_then_b_is_contradiction"
+pattern = '\B\b'
+input = "ab"
+matches = []
+
+[[test]]
+name = "start_end_alt_intersect_dotstar"
+pattern = '(^a|b$)&(.*)'
+input = "ax\nxb\n"
+matches = [[0, 1], [4, 5]]
+
+
+[[test]]
+name = 'union_with_anchored_branch_simple'
+pattern = '^aa|bb'
+input = "aa\nbb aa"
+matches = [[0, 2], [3, 5]]
+
+[[test]]
+name = 'union_with_anchored_branch_mixed'
+pattern = 'aa|bb|^##|cc'
+input = "##\nbb ## cc aa"
+matches = [[0, 2], [3, 5], [9, 11], [12, 14]]
+
+[[test]]
+name = "lookahead_after_unsatisfiable_string_anchor"
+pattern = '\n\A(?=b)'
+input = "abc"
+matches = []
+
+
+[[test]]
+name = "begin_anchored_wb_class_ab"
+pattern = '\A[a-z(]\b'
+input = "ab"
+matches = []
+
+[[test]]
+name = "begin_anchored_wb_class_parens"
+pattern = '\A[a-z(]\b'
+input = "(("
+matches = []
+
+[[test]]
+name = "begin_anchored_wb_class_paren"
+pattern = '\A[a-z(]\b'
+input = "("
+matches = []
+
+[[test]]
+name = "begin_anchored_wb_class_a_b"
+pattern = '\A[a-z(]\b'
+input = "a b"
+matches = [[0, 1]]
+
+[[test]]
+name = "begin_anchored_wb_class_paren_a"
+pattern = '\A[a-z(]\b'
+input = "(a"
+matches = [[0, 1]]
+
+
+[[test]]
+name = "begin_star_lookbehind_group"
+pattern = '^(?<=\s*)(import\s*\{.*)'
+input = "import { foo }"
+matches = [[0, 14]]
+
+[[test]]
+name = "case_split_boundaries"
+pattern = '(?<=[^A-Z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|(?<=[_-])(?=[^_-])'
+input = "fooBar_baz"
+matches = [[3, 3], [7, 7]]
+
+[[test]]
+name = "fixed_lookarounds"
+pattern = '(?<=[^A-Z])a(?=[A-Z])|(?<=[A-Z])b(?=[A-Z][a-z])'
+input = "xaAGbAa"
+matches = [[1, 2], [4, 5]]
+
+[[test]]
+name = "union_diff_lb_lengths_overlap_first_byte"
+pattern = '(?<=a)bc|(?<=xy)bcd'
+input = "xybcd"
+matches = [[2, 5]]
+
+
+[[test]]
+name = 'anchor_in_alt_intersect_dot_star'
+pattern = '(export|^function)&(.*)'
+input = "function foo\nexport bar\n  function baz\nexport qux"
+ascii = true
+matches = [[0, 8], [13, 19], [39, 45]]
+
+
+[[test]]
+name = "union_lb_branch_first_byte_disjoint_ab"
+pattern = '(^a)|([^a]a)'
+input = "ab"
+matches = [[0, 1]]
+
+[[test]]
+name = "union_lb_branch_first_byte_disjoint_ba"
+pattern = '(^a)|([^a]a)'
+input = "ba"
+matches = [[0, 2]]
+
+[[test]]
+name = "union_lb_branch_first_byte_disjoint_aa"
+pattern = '(^a)|([^a]a)'
+input = "aa"
+matches = [[0, 1]]
+
+[[test]]
+name = "union_lb_branch_first_byte_disjoint_dashes_1"
+pattern = '(^---)|([^-]---)'
+input = "---x"
+matches = [[0, 3]]
+
+[[test]]
+name = "union_lb_branch_first_byte_disjoint_dashes_2"
+pattern = '(^---)|([^-]---)'
+input = "a---x"
+matches = [[0, 4]]
+
+[[test]]
+name = "union_lb_branch_first_byte_disjoint_dashes_3"
+pattern = '(^---)|([^-]---)'
+input = "----"
+matches = [[0, 3]]
+
+[[test]]
+name = "factored_lb_la_union_before_atom"
+pattern = '((?<=a)(?=b)|(?<=c)(?=d))b'
+input = "ab"
+matches = [[1, 2]]
+
+[[test]]
+name = "wb_dot_space_m"
+pattern = '\b.'
+input = " M"
+matches = [[1, 2]]
+
+[[test]]
+name = "wb_dot_single"
+pattern = '\b.'
+input = "a"
+matches = [[0, 1]]
+
+[[test]]
+name = "wb_neg_class_spaces_m"
+pattern = '\b[^\n\r]'
+input = "   M"
+matches = [[3, 4]]
+
+[[test]]
+name = "wb_neg_class_punct"
+pattern = '\b[^\n\r]'
+input = "/*!"
+matches = []
+
+
+[[test]]
+name = "lb_la_alt_supported_abc"
+pattern = '(?<=a)bc|(?<=xy)bcd'
+input = "abc"
+matches = [[1, 3]]
+
+[[test]]
+name = "lb_la_alt_supported_xybcd"
+pattern = '(?<=a)bc|(?<=xy)bcd'
+input = "xybcd"
+matches = [[2, 5]]
+
+[[test]]
+name = "lb_la_alt_supported_zbcd"
+pattern = '(?<=a)bc|(?<=xy)bcd'
+input = "zbcd"
+matches = []
+
+
+[[test]]
+name = "begin_anchored_wb_counted_abcd"
+pattern = '\A[a-z(]{1,3}\b'
+input = "abcd"
+matches = []
+
+[[test]]
+name = "begin_anchored_wb_counted_ab_cd"
+pattern = '\A[a-z(]{1,3}\b'
+input = "ab cd"
+matches = [[0, 2]]
+
+
+
+[[test]]
+name = "neg_class_not_word_bang"
+pattern = '\b[^\n\r]'
+input = "/*!"
+matches = []
+
+[[test]]
+name = "neg_class_not_word_star_slash"
+pattern = '\b[^\n\r]'
+input = " */"
+matches = []
+
+[[test]]
+name = "neg_class_not_word_slash_star"
+pattern = '\b[^\n\r]'
+input = "/**"
+matches = []
+
+
+[[test]]
+name = 'union_with_word_boundary_branch'
+pattern = '(a|\bb)'
+input = 'a xb bb ya'
+matches = [[0, 1], [5, 6], [9, 10]]
+
+[[test]]
+name = 'leading_union_lb_in_concat'
+pattern = '(^|[^-\s])--([^-\s]|$)'
+input = "foo--bar and --bad and good--\nok"
+ascii = true
+matches = [[2, 6], [26, 29]]
+
+
+[[test]]
+name = "wb_neg_newline_class_punct_only"
+pattern = '\b[^\n]'
+input = "/*!"
+matches = []
+
+[[test]]
+name = "wb_neg_newline_cr_class_foo"
+pattern = '\b[^\n\r]'
+input = "foo /*!"
+matches = [[0, 1], [3, 4]]
+
+[[test]]
+name = "wb_digit_dot_plus_a16"
+pattern = '\b[\d.]+'
+input = "a16"
+vs_regex = true
+
+[[test]]
+name = "wb_digit_dot_plus_xdot"
+pattern = '\b[\d.]+'
+input = "x."
+vs_regex = true
+
+[[test]]
+name = "wb_digit_dot_plus_a1"
+pattern = '\b[\d.]+'
+input = "a1"
+vs_regex = true
+
+[[test]]
+name = "wb_digit_dot_plus_a_1_dot"
+pattern = '\b[\d.]+'
+input = "a 1 ."
+vs_regex = true
+
+[[test]]
+name = "wb_digit_dot_plus_pi"
+pattern = '\b[\d.]+'
+input = "3.14 x.5"
+vs_regex = true
+
+[[test]]
+name = "wb_digit_dot_plus_dot5a"
+pattern = '\b[\d.]+'
+input = ".5a 2"
+vs_regex = true
+
+[[test]]
+name = "wb_digit_dot_one_a16"
+pattern = '\b[\d.]'
+input = "a16"
+vs_regex = true
+
+[[test]]
+name = "wb_digit_dot_one_xdot"
+pattern = '\b[\d.]'
+input = "x."
+vs_regex = true
+
+[[test]]
+name = "wb_digit_dot_one_a1"
+pattern = '\b[\d.]'
+input = "a1"
+vs_regex = true
+
+[[test]]
+name = "wb_digit_dot_one_a_1_dot"
+pattern = '\b[\d.]'
+input = "a 1 ."
+vs_regex = true
+
+[[test]]
+name = "wb_digit_dot_one_pi"
+pattern = '\b[\d.]'
+input = "3.14 x.5"
+vs_regex = true
+
+[[test]]
+name = "wb_digit_dot_one_dot5a"
+pattern = '\b[\d.]'
+input = ".5a 2"
+vs_regex = true
+
+[[test]]
+name = "wb_09_dot_plus_a16"
+pattern = '\b[0-9.]+'
+input = "a16"
+vs_regex = true
+
+[[test]]
+name = "wb_09_dot_plus_xdot"
+pattern = '\b[0-9.]+'
+input = "x."
+vs_regex = true
+
+[[test]]
+name = "wb_09_dot_plus_a1"
+pattern = '\b[0-9.]+'
+input = "a1"
+vs_regex = true
+
+[[test]]
+name = "wb_09_dot_plus_a_1_dot"
+pattern = '\b[0-9.]+'
+input = "a 1 ."
+vs_regex = true
+
+[[test]]
+name = "wb_09_dot_plus_pi"
+pattern = '\b[0-9.]+'
+input = "3.14 x.5"
+vs_regex = true
+
+[[test]]
+name = "wb_09_dot_plus_dot5a"
+pattern = '\b[0-9.]+'
+input = ".5a 2"
+vs_regex = true
+
+[[test]]
+name = "wb_09_dot_one_a16"
+pattern = '\b[0-9.]'
+input = "a16"
+vs_regex = true
+
+[[test]]
+name = "wb_09_dot_one_xdot"
+pattern = '\b[0-9.]'
+input = "x."
+vs_regex = true
+
+[[test]]
+name = "wb_09_dot_one_a1"
+pattern = '\b[0-9.]'
+input = "a1"
+vs_regex = true
+
+[[test]]
+name = "wb_09_dot_one_a_1_dot"
+pattern = '\b[0-9.]'
+input = "a 1 ."
+vs_regex = true
+
+[[test]]
+name = "wb_09_dot_one_pi"
+pattern = '\b[0-9.]'
+input = "3.14 x.5"
+vs_regex = true
+
+[[test]]
+name = "wb_09_dot_one_dot5a"
+pattern = '\b[0-9.]'
+input = ".5a 2"
+vs_regex = true
+
+[[test]]
+name = "alt_embedded_line_anchor_caret"
+pattern = '^.*(a|^b)'
+expect_error = true
+reason = "alternation embeds ^ inside; would cross newline"
+
+[[test]]
+name = "wb_or_dash_word_dash0"
+pattern = '(\b|-)\w'
+input = "xxxxx-0yyyyy"
+matches = [[0, 1], [5, 7]]
+
+[[test]]
+name = "center_lookbehind_alt_after_literal"
+pattern = 'ab((?<=x)|y)'
+expect_error = true
+reason = "lookbehind in center of concat"
+
+[[test]]
+name = "reverse_center_lookbehind_from_lookahead_alt_star"
+pattern = '(?:(?=b)|-)b*b(?!b)'
+expect_error = true
+reason = "reverse contains lookbehind in center of concat"
+
+[[test]]
+name = "lookbehind_lookahead_alt_neg_lookahead_no_fwd_end"
+pattern = '((?<!b)(?=b)|-)b(?!b)'
+expect_error = true
+reason = "lookbehind in center of concat"
+
+[[test]]
+name = "lookahead_in_optional_with_surrounding_stars_unsupported"
+pattern = '((?=(x|yy))x)? *\z'
+expect_error = true
+reason = "reverse contains lookbehind in center of concat"
+
+[[test]]
+name = "lookbehind_dot_a"
+pattern = ".(?<=a)"
+input = "aaa"
+expect_error = true
+matches = [[0, 1], [1, 2], [2, 3]]
+
+[[test]]
+name = "fas_dotstar_lb_x_foo_dotstar"
+pattern = '[\s\S]+(?<=x)foo[\s\S]+'
+input = "axfoo def"
+expect_error = true
+matches = [[0, 9]]
+
+[[test]]
+name = "neg_la_space_neg_lb_space_xy"
+pattern = '\A(?!\s)[\s\S]*(?<!\s)\z'
+input = "xy"
+expect_error = true
+matches = [[0, 2]]
+
+[[test]]
+name = "neg_la_space_neg_lb_space_lead"
+pattern = '\A(?!\s)[\s\S]*(?<!\s)\z'
+input = " xy"
+expect_error = true
+matches = []
+
+[[test]]
+name = "neg_la_space_neg_lb_space_trail"
+pattern = '\A(?!\s)[\s\S]*(?<!\s)\z'
+input = "xy "
+expect_error = true
+matches = []
+
+[[test]]
+name = "neg_la_space_neg_lb_space_interior"
+pattern = '\A(?!\s)[\s\S]*(?<!\s)\z'
+input = "x \n y"
+expect_error = true
+matches = [[0, 5]]
+
+[[test]]
+name = "lb_after_universal_plus_star"
+pattern = '[\s\S]+(?<=\S)\z'
+input = "*"
+expect_error = true
+matches = [[0, 1]]
+
+[[test]]
+name = "lb_after_universal_plus_ab"
+pattern = '[\s\S]+(?<=\S)\z'
+input = "ab"
+expect_error = true
+matches = [[0, 2]]
+
+[[test]]
+name = "lb_after_universal_plus_trail_space"
+pattern = '[\s\S]+(?<=\S)\z'
+input = "a "
+expect_error = true
+matches = []
+
+[[test]]
+name = "trim_both_sides_star"
+pattern = '\A(\s*(?=\z|\S))([\s\S]+)((?<=\A|\S)\s*)\z'
+input = " *"
+expect_error = true
+matches = [[0, 2]]
+
+[[test]]
+name = "trim_both_sides_abc"
+pattern = '\A(\s*(?=\z|\S))([\s\S]+)((?<=\A|\S)\s*)\z'
+input = "abc"
+expect_error = true
+matches = [[0, 3]]
+
+[[test]]
+name = "trim_both_sides_spaces"
+pattern = '\A(\s*(?=\z|\S))([\s\S]+)((?<=\A|\S)\s*)\z'
+input = "  "
+expect_error = true
+matches = []
+
+[[test]]
+name = "neg_lookarounds_dot_star"
+pattern = "a(?!b).*(?<!a)b"
+input = "a b"
+expect_error = true
+matches = [[0, 3]]
+
+[[test]]
+name = "lb_inference_pp"
+pattern = "<.*(?<=<)bg"
+input = "<bg"
+expect_error = true
+matches = [[0, 3]]
+
+[[test]]
+name = "lookaround_commute_after_consume"
+pattern = "x(?=a)(?<=a)"
+input = "xay"
+expect_error = true
+matches = []
+
+[[test]]
+name = "trim_optional_core"
+pattern = '\A(([ \t\r\n]*)(\s*))(?:(?=\S)[\s\S]*\S)?((\s*)([ \t\r\n]*))\z'
+input = " *"
+matches = [[0, 2]]

@@ -169,8 +169,6 @@ pub fn calc_potential_start(
     Ok(result)
 }
 
-
-
 fn collect_loop_factored_bodies(b: &RegexBuilder, init: NodeId) -> Option<Vec<NodeId>> {
     let mut bodies = Vec::new();
     let mut stack = vec![init];
@@ -208,7 +206,8 @@ pub(crate) fn calc_combined_prefix(
     let potential = calc_potential_start(b, init, max_prefix_len, max_frontier_size, true)?;
     let head = if let Some(c) = synthesize_inter_constraint(b, init) {
         let constrained = b.mk_inter(init, c);
-        let mut h = calc_potential_start(b, constrained, fingerprint_depth, max_frontier_size, false)?;
+        let mut h =
+            calc_potential_start(b, constrained, fingerprint_depth, max_frontier_size, false)?;
         h.truncate(fingerprint_depth);
         h
     } else {
@@ -226,8 +225,6 @@ pub(crate) fn calc_combined_prefix(
     }
     Ok(out)
 }
-
-
 
 #[derive(Clone, Debug)]
 pub struct PrefixSet {
@@ -737,7 +734,10 @@ pub(crate) fn build_rev_prefix_search(
 
 /// Runtime prefix acceleration
 #[cfg_attr(debug_assertions, derive(Debug))]
-#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize, Clone))]
+#[cfg_attr(
+    feature = "serialize",
+    derive(serde::Serialize, serde::Deserialize, Clone)
+)]
 pub enum PrefixKind {
     AnchoredRev,
     AnchoredFwd(crate::accel::FwdPrefixSearch),
@@ -758,7 +758,6 @@ impl PrefixKind {
     pub(crate) fn is_rev(&self) -> bool {
         matches!(self, PrefixKind::AnchoredRev | PrefixKind::PotentialStart)
     }
-
 }
 
 #[allow(dead_code)]
@@ -916,20 +915,21 @@ fn select_prefix_simd(
 
     #[cfg(feature = "debug")]
     {
-        let mut all = vec![
-            ("rev anc", &sets.rev_anchored.sets, sets.rev_anchored.cost),
-            ("rev pot", &sets.rev_potential.sets, sets.rev_potential.cost),
-            ("fwd pot", &sets.fwd_potential.sets, sets.fwd_potential.cost),
-            (
-                "fwd str",
-                &sets.fwd_potential_stripped.sets,
-                sets.fwd_potential_stripped.cost,
-            ),
-        ];
-        all.sort_by_key(|(_, _, c)| *c);
-        for (name, s, cost) in all {
-            println!("  [sets] {} {:?} cost={}", name, pp_sets(b, s), cost);
-        }
+        // keeping for debugging
+        // let mut all = vec![
+        //     ("rev anc", &sets.rev_anchored.sets, sets.rev_anchored.cost),
+        //     ("rev pot", &sets.rev_potential.sets, sets.rev_potential.cost),
+        //     ("fwd pot", &sets.fwd_potential.sets, sets.fwd_potential.cost),
+        //     (
+        //         "fwd str",
+        //         &sets.fwd_potential_stripped.sets,
+        //         sets.fwd_potential_stripped.cost,
+        //     ),
+        // ];
+        // all.sort_by_key(|(_, _, c)| *c);
+        // for (name, s, cost) in all {
+        //     println!("  [sets] {} {:?} cost={}", name, pp_sets(b, s), cost);
+        // }
     }
 
     let fwd_cost = sets

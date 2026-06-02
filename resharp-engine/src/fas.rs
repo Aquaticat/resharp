@@ -1,8 +1,8 @@
-use rustc_hash::FxHashMap;
 use resharp_algebra::nulls::{Nullability, NullsId};
 use resharp_algebra::RegexBuilder;
+use rustc_hash::FxHashMap;
 
-use crate::engine::{LDFA, DFA_DEAD, DFA_INITIAL};
+use crate::engine::{DFA_DEAD, DFA_INITIAL, LDFA};
 use crate::{Error, Match};
 
 const EID_NONE: u32 = NullsId::EMPTY.0;
@@ -544,5 +544,3 @@ impl LDFA {
         Ok(())
     }
 }
-
-

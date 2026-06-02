@@ -60,8 +60,6 @@ pub(crate) mod dump;
 
 pub(crate) mod simd;
 
-
-
 #[cfg(feature = "diag")]
 pub use prefix::calc_potential_start;
 #[cfg(feature = "diag")]
@@ -70,9 +68,9 @@ pub use prefix::calc_potential_start_prune;
 pub use prefix::calc_prefix_sets;
 #[cfg(feature = "diag")]
 pub use prefix::PrefixSets;
+pub(crate) use resharp_algebra::nulls::Nullability;
 pub(crate) use resharp_algebra::solver::TSetId;
 use resharp_algebra::Kind;
-pub(crate) use resharp_algebra::nulls::Nullability;
 #[doc(hidden)]
 pub use resharp_algebra::NodeId;
 #[doc(hidden)]
@@ -299,6 +297,7 @@ pub struct Regex {
     // pub(crate) trailing_star_branch_left: bool,
     pub(crate) hardened: bool,
     pub(crate) has_bounded: bool,
+    pub(crate) bounded_safe_find_all: bool,
     pub(crate) lb_check_bytes: u8,
     pub(crate) fwd_lb_begin_nullable: bool,
     pub(crate) has_anchors: bool,
@@ -646,28 +645,6 @@ fn first_lb_in_branch(b: &RegexBuilder, node: NodeId) -> Option<NodeId> {
     None
 }
 
-fn lb_char_tset(b: &mut RegexBuilder, lb_node: NodeId) -> Option<TSetId> {
-    let lb_body = b.get_lookbehind_inner(lb_node);
-    if b.get_kind(lb_body) == Kind::Concat {
-        let right = lb_body.right(b);
-        if b.get_kind(right) == Kind::Pred {
-            return Some(right.pred_tset(b));
-        }
-    }
-    if b.get_kind(lb_body) == Kind::Union {
-        let lft = lb_body.left(b);
-        let rgt = lb_body.right(b);
-        if lft == NodeId::BEGIN && b.get_kind(rgt) == Kind::Compl {
-            let inner = rgt.left(b);
-            if b.get_kind(inner) == Kind::Pred {
-                let tset = inner.pred_tset(b);
-                return Some(b.solver().not_id(tset));
-            }
-        }
-    }
-    None
-}
-
 /// heuristic checks if we can support an union with lookbehinds,
 /// we wont determine which one matched so we require them to be disjoint
 fn union_branches_distinguishable(b: &mut RegexBuilder, union_node: NodeId) -> bool {
@@ -677,13 +654,18 @@ fn union_branches_distinguishable(b: &mut RegexBuilder, union_node: NodeId) -> b
     if !any_lb {
         return true;
     }
+    // this is outside of formally verified territory, careful with changes
     if b.get_fixed_length(union_node).is_some() {
         return true;
     }
     let mut firsts: Vec<(bool, TSetId, Option<NodeId>)> = Vec::with_capacity(branches.len());
     for &br in &branches {
         let has_lb = br.contains_lookbehind(b);
-        let lb_node = if has_lb { first_lb_in_branch(b, br) } else { None };
+        let lb_node = if has_lb {
+            first_lb_in_branch(b, br)
+        } else {
+            None
+        };
         let stripped = match b.strip_lb(br) {
             Ok(s) => s,
             Err(_) => return false,
@@ -710,10 +692,13 @@ fn union_branches_distinguishable(b: &mut RegexBuilder, union_node: NodeId) -> b
             if inter == TSetId::EMPTY {
                 continue;
             }
-            let tset_i = firsts[i].2.and_then(|n| lb_char_tset(b, n));
-            let tset_j = firsts[j].2.and_then(|n| lb_char_tset(b, n));
-            let lb_disjoint = match (tset_i, tset_j) {
-                (Some(ti), Some(tj)) => b.solver().and_id(ti, tj) == TSetId::EMPTY,
+            let lb_disjoint = match (firsts[i].2, firsts[j].2) {
+                (Some(ni), Some(nj)) => {
+                    let bi = b.get_lookbehind_inner(ni);
+                    let bj = b.get_lookbehind_inner(nj);
+                    let inter = b.mk_inter(bi, bj);
+                    b.subsumes(NodeId::BOT, inter) == Some(true)
+                }
                 _ => false,
             };
             if !lb_disjoint {
@@ -724,27 +709,45 @@ fn union_branches_distinguishable(b: &mut RegexBuilder, union_node: NodeId) -> b
     true
 }
 
-/// rejects unsupported before compiling. at_root relaxes union+lookbehind via disjoint first-byte sets
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Compatibility {
+    LookaroundUnion,
+}
+
+fn combine_compatibility(
+    left: Option<Compatibility>,
+    right: Option<Compatibility>,
+) -> Option<Compatibility> {
+    left.or(right)
+}
+
 fn ensure_supported_rec(
     b: &mut RegexBuilder,
     node: NodeId,
-    at_root: bool,
-) -> Result<(), resharp_algebra::ResharpError> {
+    at_start: bool,
+    strict_lb_start: bool,
+) -> Result<Option<Compatibility>, resharp_algebra::ResharpError> {
     if !node.contains_lookaround(b) {
-        return Ok(());
+        return Ok(None);
     }
     match b.get_kind(node) {
         Kind::Union => {
             let (l, r) = (node.left(b), node.right(b));
             let has_lb = l.contains_lookbehind(b) || r.contains_lookbehind(b);
-            if !has_lb {
-                return Ok(());
+            if has_lb && !union_branches_distinguishable(b, node) {
+                return Err(resharp_algebra::ResharpError::UnsupportedPattern);
             }
-            if at_root && union_branches_distinguishable(b, node) {
-                Ok(())
+            let left = ensure_supported_rec(b, l, at_start, strict_lb_start)?;
+            let right = ensure_supported_rec(b, r, at_start, strict_lb_start)?;
+            let union = if has_lb {
+                Some(Compatibility::LookaroundUnion)
             } else {
-                Err(resharp_algebra::ResharpError::UnsupportedPattern)
-            }
+                None
+            };
+            Ok(combine_compatibility(
+                union,
+                combine_compatibility(left, right),
+            ))
         }
         Kind::Inter => {
             let (l, r) = (node.left(b), node.right(b));
@@ -752,6 +755,9 @@ fn ensure_supported_rec(
             // to unlock some patterns outside of RE# fragment like `(^abc|def)&.*`
             for (u, other) in [(l, r), (r, l)] {
                 if b.get_kind(u) == Kind::Union && u.contains_lookbehind(b) {
+                    if strict_lb_start && !at_start {
+                        return Err(resharp_algebra::ResharpError::UnsupportedPattern);
+                    }
                     let mut branches = Vec::new();
                     collect_union_branches(b, u, &mut branches);
                     let mut distributed = b.mk_inter(branches[0], other);
@@ -762,16 +768,29 @@ fn ensure_supported_rec(
                     if !union_branches_distinguishable(b, distributed) {
                         return Err(resharp_algebra::ResharpError::UnsupportedPattern);
                     }
-                    return ensure_supported_rec(b, other, false);
+                    let other_compatibility =
+                        ensure_supported_rec(b, other, at_start, strict_lb_start)?;
+                    return Ok(combine_compatibility(
+                        Some(Compatibility::LookaroundUnion),
+                        other_compatibility,
+                    ));
                 }
             }
-            ensure_supported_rec(b, l, false)?;
-            ensure_supported_rec(b, r, false)
+            let left = ensure_supported_rec(b, l, at_start, strict_lb_start)?;
+            let right = ensure_supported_rec(b, r, at_start, strict_lb_start)?;
+            Ok(combine_compatibility(left, right))
         }
         Kind::Concat => {
             let left = node.left(b);
             let right = node.right(b);
+            let (_, left_max) = b.get_min_max_length(left);
+            if left_max > 0 && b.get_kind(right) == Kind::Union && right.contains_lookbehind(b) {
+                return Err(resharp_algebra::ResharpError::UnsupportedPattern);
+            }
             if b.get_kind(left) == Kind::Union && left.contains_lookbehind(b) {
+                if strict_lb_start && !at_start {
+                    return Err(resharp_algebra::ResharpError::UnsupportedPattern);
+                }
                 let mut branches = Vec::new();
                 collect_union_branches(b, left, &mut branches);
                 let mut distributed = b.mk_concat(branches[0], right);
@@ -780,37 +799,96 @@ fn ensure_supported_rec(
                     distributed = b.mk_union(distributed, arm);
                 }
                 if union_branches_distinguishable(b, distributed) {
-                    return ensure_supported_rec(b, right, false);
+                    let right_compatibility =
+                        ensure_supported_rec(b, right, at_start, strict_lb_start)?;
+                    return Ok(combine_compatibility(
+                        Some(Compatibility::LookaroundUnion),
+                        right_compatibility,
+                    ));
                 } else {
                     return Err(resharp_algebra::ResharpError::UnsupportedPattern);
                 }
             }
-            ensure_supported_rec(b, left, false)?;
-            ensure_supported_rec(b, right, false)
+            let left_compatibility = ensure_supported_rec(b, left, at_start, strict_lb_start)?;
+            let (_, left_max) = b.get_min_max_length(left);
+            let right_compatibility =
+                ensure_supported_rec(b, right, at_start && left_max == 0, strict_lb_start)?;
+            Ok(combine_compatibility(
+                left_compatibility,
+                right_compatibility,
+            ))
         }
         Kind::Star => {
             if node.left(b).contains_lookaround(b) {
                 return Err(resharp_algebra::ResharpError::UnsupportedPattern);
             }
-            ensure_supported_rec(b, node.left(b), false)
+            ensure_supported_rec(b, node.left(b), at_start, strict_lb_start)
         }
-        Kind::Counted => ensure_supported_rec(b, node.left(b), false),
-        Kind::Compl => ensure_supported_rec(b, node.left(b), false),
-        Kind::Lookbehind | Kind::Lookahead => {
-            ensure_supported_rec(b, node.left(b), false)?;
-            ensure_supported_rec(b, node.right(b), false)
+        Kind::Counted => ensure_supported_rec(b, node.left(b), at_start, strict_lb_start),
+        Kind::Compl => ensure_supported_rec(b, node.left(b), at_start, strict_lb_start),
+        Kind::Lookbehind => {
+            let prev = node.right(b);
+            let (_, prev_max) = if prev == NodeId::MISSING {
+                (0, 0)
+            } else {
+                b.get_min_max_length(prev)
+            };
+            if !at_start || prev_max > 0 {
+                return Err(resharp_algebra::ResharpError::UnsupportedPattern);
+            }
+            let left = ensure_supported_rec(b, node.left(b), at_start, strict_lb_start)?;
+            let right = ensure_supported_rec(b, prev, at_start, strict_lb_start)?;
+            Ok(combine_compatibility(left, right))
         }
-        Kind::Pred => Ok(()),
-        Kind::Begin => Ok(()),
-        Kind::End => Ok(()),
+        Kind::Lookahead => {
+            let left = ensure_supported_rec(b, node.left(b), at_start, strict_lb_start)?;
+            let right = ensure_supported_rec(b, node.right(b), at_start, strict_lb_start)?;
+            Ok(combine_compatibility(left, right))
+        }
+        Kind::Pred => Ok(None),
+        Kind::Begin => Ok(None),
+        Kind::End => Ok(None),
+    }
+}
+
+fn ensure_begin_leading(
+    b: &RegexBuilder,
+    node: NodeId,
+    at_start: bool,
+) -> Result<(), resharp_algebra::ResharpError> {
+    if !b.contains_anchors(node) {
+        return Ok(());
+    }
+    match b.get_kind(node) {
+        Kind::Begin => {
+            if at_start {
+                Ok(())
+            } else {
+                Err(resharp_algebra::ResharpError::UnsupportedPattern)
+            }
+        }
+        Kind::End | Kind::Pred => Ok(()),
+        Kind::Concat => {
+            let l = node.left(b);
+            ensure_begin_leading(b, l, at_start)?;
+            let (_, lmax) = b.get_min_max_length(l);
+            ensure_begin_leading(b, node.right(b), at_start && lmax == 0)
+        }
+        Kind::Union | Kind::Inter => {
+            ensure_begin_leading(b, node.left(b), at_start)?;
+            ensure_begin_leading(b, node.right(b), at_start)
+        }
+        Kind::Star | Kind::Counted | Kind::Compl => ensure_begin_leading(b, node.left(b), false),
+        Kind::Lookbehind | Kind::Lookahead => Ok(()),
     }
 }
 
 fn ensure_supported(
     b: &mut RegexBuilder,
     node: NodeId,
-) -> Result<(), resharp_algebra::ResharpError> {
-    ensure_supported_rec(b, node, true)
+) -> Result<Option<Compatibility>, resharp_algebra::ResharpError> {
+    ensure_begin_leading(b, node, true)?;
+    ensure_supported_rec(b, node, true, true)
 }
 
 impl Regex {
@@ -886,7 +964,7 @@ impl Regex {
         if b.tree_size(node, node_limit) >= node_limit {
             return Err(Error::PatternTooLarge);
         }
-        ensure_supported(&mut b, node)?;
+        let _compatibility = ensure_supported(&mut b, node)?;
 
         let empty_nullable = b
             .nullability_emptystring(node)
@@ -896,19 +974,18 @@ impl Regex {
         let node = b.simplify_fwd_initial(node);
         let fwd_start = b.strip_lb(node)?;
         let fwd_end_nullable = b.nullability(fwd_start).has(Nullability::END);
-        // let mut shape_memo: FxHashMap<NodeId, NodeId> = FxHashMap::default();
-        // let fwd_shape = b.prune_fwd(fwd_start, &mut shape_memo);
-        // let lb_stripped = fwd_start != node;
-        // let trailing_star_anchored_left =
-        //     !lb_stripped && b.ends_with_ts(fwd_shape) && !b.starts_with_ts(fwd_shape);
-        // let trailing_star_branch_left = !lb_stripped
-        //     && !trailing_star_anchored_left
-        //     && b.ends_with_ts_any_branch(fwd_shape)
-        //     && !b.starts_with_ts(fwd_shape);
         let ts_rev_start = b.ts_rev_start(node)?;
+        // ensure_supported_rec(&mut b, ts_rev_start, true, false)?;
+        #[cfg(feature = "debug")]
+        {
+            eprintln!("[fwd]: {:.70}", b.pp(node));
+            eprintln!("[ts_rev]: {:.70}", b.pp(ts_rev_start));
+        }
+
         let is_empty_lang = node == NodeId::BOT;
         // TODO: make it configurable to actually check and reject empty lang entriely
-        let fwd_begin_anchored = b.is_begin_anchored(node);
+        let lb_stripped = fwd_start != node;
+        let fwd_begin_anchored = b.is_begin_anchored(node) && !lb_stripped;
         let rev_trivial = b.nullability(ts_rev_start) == Nullability::ALWAYS;
         let rev_end_anchored = !fwd_end_nullable && b.is_begin_anchored(ts_rev_start);
         let fixed_length = b.get_fixed_length(node);
@@ -935,6 +1012,18 @@ impl Regex {
             max_cap,
             ah.no_fwd_prefix,
         )?;
+        #[cfg(feature = "debug")]
+        {
+            let kind = match (&selected, &rev_skip) {
+                (Some(prefix::PrefixKind::AnchoredFwd(_)), _) => "AnchoredFwd",
+                (Some(prefix::PrefixKind::AnchoredFwdLb(_)), _) => "AnchoredFwdLb",
+                (Some(prefix::PrefixKind::AnchoredRev), _) => "AnchoredRev",
+                (Some(prefix::PrefixKind::PotentialStart), _) => "PotentialStart",
+                (None, Some(_)) => "<none> (rev prefix_skip)",
+                (None, None) => "<none>",
+            };
+            eprintln!("[prefix] selected={kind} rev_skip={}", rev_skip.is_some());
+        }
         let has_fwd_prefix = matches!(
             selected,
             Some(prefix::PrefixKind::AnchoredFwd(_) | prefix::PrefixKind::AnchoredFwdLb(_))
@@ -999,6 +1088,14 @@ impl Regex {
         };
 
         let has_bounded = bounded.is_some();
+        let bounded_safe_find_all = if has_bounded {
+            let inner_match = b.mk_concat(node, resharp_algebra::NodeId::TOPPLUS);
+            let interior = b.mk_concat(resharp_algebra::NodeId::TOPPLUS, inner_match);
+            let overlap = b.mk_inter(node, interior);
+            b.is_empty_lang(overlap) == Some(true)
+        } else {
+            false
+        };
         let has_anchors = b.contains_anchors(node);
 
         let hardened = if opts.hardened && !has_bounded && fixed_length.is_none() && max_cap >= 64 {
@@ -1008,7 +1105,10 @@ impl Regex {
         };
 
         let fas = if hardened {
-            Some(fas::FwdDFA::new(&fwd, fwd_start.contains_lookahead(&b)))
+            Some(fas::FwdDFA::new(
+                &fwd,
+                fwd_start.contains_lookahead(&b) || initial_nullability != Nullability::ALWAYS,
+            ))
         } else {
             None
         };
@@ -1027,7 +1127,11 @@ impl Regex {
                 fas,
             }),
             find_all: compute_find_all(
-                is_empty_lang, fwd_begin_anchored, hardened, has_bounded, &selected,
+                is_empty_lang,
+                fwd_begin_anchored,
+                hardened,
+                has_bounded,
+                &selected,
             ),
             prefix: selected,
             fixed_length,
@@ -1043,6 +1147,7 @@ impl Regex {
             // trailing_star_branch_left,
             hardened,
             has_bounded,
+            bounded_safe_find_all,
             lb_check_bytes,
             fwd_lb_begin_nullable,
             has_anchors,
@@ -1160,13 +1265,21 @@ impl Regex {
             FindAll::EmptyLang => Ok(vec![]),
             FindAll::Anchored => Ok(self.find_anchored(input)?.into_iter().collect()),
             FindAll::Hardened | FindAll::Dfa => self.find_all_dfa(input),
-            FindAll::Bounded => self.find_all_fwd_bounded(input),
+            FindAll::Bounded => {
+                if self.bounded_safe_find_all {
+                    self.find_all_fwd_bounded(input)
+                } else {
+                    self.find_all_dfa(input)
+                }
+            }
             FindAll::FwdPrefix => match &self.prefix {
                 Some(prefix::PrefixKind::AnchoredFwd(fp)) => self.find_all_fwd_prefix(fp, input),
                 _ => unreachable!("FwdPrefix without AnchoredFwd prefix"),
             },
             FindAll::FwdLbPrefix => match &self.prefix {
-                Some(prefix::PrefixKind::AnchoredFwdLb(fp)) => self.find_all_fwd_lb_prefix(fp, input),
+                Some(prefix::PrefixKind::AnchoredFwdLb(fp)) => {
+                    self.find_all_fwd_lb_prefix(fp, input)
+                }
                 _ => unreachable!("FwdLbPrefix without AnchoredFwdLb prefix"),
             },
         }
@@ -1180,13 +1293,25 @@ fn compute_find_all(
     has_bounded: bool,
     prefix: &Option<prefix::PrefixKind>,
 ) -> FindAll {
-    if is_empty_lang { return FindAll::EmptyLang; }
-    if fwd_begin_anchored { return FindAll::Anchored; }
-    if hardened { return FindAll::Hardened; }
+    if is_empty_lang {
+        return FindAll::EmptyLang;
+    }
+    if fwd_begin_anchored {
+        return FindAll::Anchored;
+    }
+    if hardened {
+        return FindAll::Hardened;
+    }
     match prefix {
         Some(prefix::PrefixKind::AnchoredFwd(_)) => FindAll::FwdPrefix,
         Some(prefix::PrefixKind::AnchoredFwdLb(_)) => FindAll::FwdLbPrefix,
-        _ => if has_bounded { FindAll::Bounded } else { FindAll::Dfa },
+        _ => {
+            if has_bounded {
+                FindAll::Bounded
+            } else {
+                FindAll::Dfa
+            }
+        }
     }
 }
 
@@ -1248,7 +1373,7 @@ pub(crate) fn find_strict_convergence_node(
                         out.push((head, tail));
                         true
                     }
-                    Kind::Star => collect_pred_leaves(b, tail, out),
+                    Kind::Star => false,
                     Kind::Union => {
                         let l = b.mk_concat(head.left(b), tail);
                         let r = b.mk_concat(head.right(b), tail);
@@ -1436,7 +1561,11 @@ impl Regex {
             let eid = fwd.effects_id.get(i).copied().unwrap_or(0);
             let ceid = fwd.center_effect_id.get(i).copied().unwrap_or(0);
             let pretty = inner.b.pp(node);
-            let pretty = if pretty.len() > 400 { format!("{}...", &pretty[..400]) } else { pretty };
+            let pretty = if pretty.len() > 400 {
+                format!("{}...", &pretty[..400])
+            } else {
+                pretty
+            };
             out += &format!("  s[{}] eid={} ceid={} pp={}\n", i, eid, ceid, pretty);
         }
         out
@@ -1450,17 +1579,26 @@ impl Regex {
         let fwd = &mut inner.fwd;
         let b = &mut inner.b;
         let mut out = String::new();
-        if input.is_empty() { return out; }
+        if input.is_empty() {
+            return out;
+        }
         let mt = fwd.mt_lookup[input[0] as usize] as u32;
         let mut sid = fwd.begin_table[mt as usize];
-        writeln!(out, "pos=0 byte={:?} (BEGIN) -> s[{}]", input[0] as char, sid).unwrap();
+        writeln!(
+            out,
+            "pos=0 byte={:?} (BEGIN) -> s[{}]",
+            input[0] as char, sid
+        )
+        .unwrap();
         Self::dump_fwd_state(&mut out, b, fwd, sid);
         for i in 1..input.len() {
             let mt = fwd.mt_lookup[input[i] as usize] as u32;
             sid = fwd.lazy_transition(b, sid, mt).unwrap();
             writeln!(out, "pos={} byte={:?} -> s[{}]", i, input[i] as char, sid).unwrap();
             Self::dump_fwd_state(&mut out, b, fwd, sid);
-            if sid as u32 <= engine::DFA_DEAD as u32 { break; }
+            if sid as u32 <= engine::DFA_DEAD as u32 {
+                break;
+            }
         }
         out
     }
@@ -1481,7 +1619,11 @@ impl Regex {
         let eid = fwd.effects_id.get(sid as usize).copied().unwrap_or(0);
         let ceid = fwd.center_effect_id.get(sid as usize).copied().unwrap_or(0);
         let pp = b.pp(node);
-        let pp = if pp.len() > 240 { format!("{}...", &pp[..240]) } else { pp };
+        let pp = if pp.len() > 240 {
+            format!("{}...", &pp[..240])
+        } else {
+            pp
+        };
         writeln!(out, "  pp = {}", pp).unwrap();
         writeln!(out, "  eid={} (end), center_eid={}", eid, ceid).unwrap();
         for (label, e) in [("end", eid), ("center", ceid)] {
@@ -1490,7 +1632,14 @@ impl Regex {
                     .iter()
                     .map(|n| format!("(mask={:#b},rel={})", n.mask.0, n.rel))
                     .collect();
-                writeln!(out, "  effects[{}][{}] = [{}]", label, e, entries.join(", ")).unwrap();
+                writeln!(
+                    out,
+                    "  effects[{}][{}] = [{}]",
+                    label,
+                    e,
+                    entries.join(", ")
+                )
+                .unwrap();
             }
         }
     }
@@ -1578,6 +1727,9 @@ impl Regex {
         inner
             .rev_ts
             .collect_rev(&mut inner.b, input.len() - 1, input, &mut inner.nulls)?;
+
+        #[cfg(all(feature = "debug", debug_assertions))]
+        eprintln!("[nulls] {:?}", inner.nulls);
 
         if self.hardened {
             let RegexInner {
@@ -1710,15 +1862,21 @@ impl Regex {
         }
         if self.rev_end_anchored {
             let inner = &mut *self.inner.lock().unwrap();
-            let start = inner.rev_ts.scan_rev_from(&mut inner.b, input.len(), 0, input)?;
+            let start = inner
+                .rev_ts
+                .scan_rev_from(&mut inner.b, input.len(), 0, input)?;
             return Ok(start != engine::NO_MATCH);
         }
         if self.has_bounded {
             return self.is_match_fwd_bounded(input);
         }
         match &self.prefix {
-            Some(prefix::PrefixKind::AnchoredFwdLb(fp)) => return self.is_match_fwd_lb_prefix(fp, input),
-            Some(prefix::PrefixKind::AnchoredFwd(fp)) => return self.is_match_fwd_prefix(fp, input),
+            Some(prefix::PrefixKind::AnchoredFwdLb(fp)) => {
+                return self.is_match_fwd_lb_prefix(fp, input)
+            }
+            Some(prefix::PrefixKind::AnchoredFwd(fp)) => {
+                return self.is_match_fwd_prefix(fp, input)
+            }
             _ => {}
         }
         let inner = &mut *self.inner.lock().unwrap();

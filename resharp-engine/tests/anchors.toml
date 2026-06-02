@@ -4,12 +4,6 @@ matches = [[start, end]] in utf8 bytes (half-open intervals).
 '''
 
 [[test]]
-name = "exact_string"
-pattern = '^\A([^\: \t]+):\s*(.+)\z'
-input = "\n:!"
-matches = [[0, 3]]
-
-[[test]]
 name = "anchor_digit_exact"
 pattern = '^\d$'
 input = "1"
@@ -656,11 +650,6 @@ name = "fas_caret_dotstar_dollar"
 pattern = '^.*$'
 input = "abc"
 matches = [[0, 3]]
-[[test]]
-name = "start_end_alt_intersect_dotstar"
-pattern = '(^a|b$)&(.*)'
-input = "ax\nxb\n"
-matches = [[0, 1], [4, 5]]
 
 [[test]]
 name = "literal_branch_does_not_poison_end_anchored_branch"

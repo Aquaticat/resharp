@@ -194,3 +194,123 @@ name = "wb_html_tag_negclass_star"
 pattern = '<script\b[^<]*'
 input = "<scripts!</script>)<"
 matches = []
+
+[[test]]
+name = "begin_anchored_wb_abc_abcd"
+pattern = '\Aabc\b'
+input = "abcd"
+matches = []
+
+[[test]]
+name = "begin_anchored_wb_abc_def"
+pattern = '\Aabc\b'
+input = "abc def"
+matches = [[0, 3]]
+
+[[test]]
+name = "begin_anchored_wb_word_plus"
+pattern = '\A\w+\b'
+input = "abc def"
+matches = [[0, 3]]
+
+[[test]]
+name = "stacked_neg_lb_word_dash_if"
+pattern = '(?<!\w)(?<!-)if'
+input = "specified"
+matches = []
+
+[[test]]
+name = "wb_neg_lb_dash_if_specified"
+pattern = '\b(?<!-)if'
+input = "specified"
+matches = []
+
+[[test]]
+name = "wb_neg_lb_dash_if_x"
+pattern = '\b(?<!-)if'
+input = "if x"
+matches = [[0, 2]]
+
+[[test]]
+name = "wb_neg_lb_dash_dashif"
+pattern = '\b(?<!-)if'
+input = "-if"
+matches = []
+
+[[test]]
+name = "stacked_neg_lb_ab_c_zc"
+pattern = '(?<!a)(?<!b)c'
+input = "zc"
+matches = [[1, 2]]
+
+[[test]]
+name = "stacked_neg_lb_ab_c_ac"
+pattern = '(?<!a)(?<!b)c'
+input = "ac"
+matches = []
+
+[[test]]
+name = "stacked_neg_lb_ab_c_bc"
+pattern = '(?<!a)(?<!b)c'
+input = "bc"
+matches = []
+
+[[test]]
+name = "rust_numeric_literal_suffix_limited"
+pattern = '((?:\.\.)?)(?:\b0b\.?|\b|\.)\d[\d_]*(?:(?!\.\.)\.[\d_]*)?(?:e[+-]?\d[\d_]*)?[ulfi]{0,4}'
+input = "    encoding = 'utf8';"
+expect_error = true
+
+[[test]]
+name = "signed_decimal_word_boundary_lower_exp"
+pattern = '(?:\B-|\b)\d+(?:\.\d+)?(?:e[+-]?\d+)?\b'
+input = "    encoding = 'utf8';"
+expect_error = true
+
+[[test]]
+name = "lowercase_dotted_identifier_before_assignment"
+pattern = '(?:\b|\B\.)[a-z_]\w*(?:\.[a-z_]\w*)*(?=\s+[a-z_]\w*\s*[=;])'
+input = '        <h4 class="d-flex justify-content-between align-items-center mb-3">'
+expect_error = true
+
+[[test]]
+name = "object_key_before_colon_not_equals"
+pattern = '(^|[^\\.])(?:"(?:\\.|[^\\"\r\n])*"|`[^`]*`|\b[a-z_]\w*\b)(?=\s*:(?!=))'
+input = "app.del = deprecate.function(app.delete, 'app.del: Use app.delete instead');"
+expect_error = true
+
+[[test]]
+name = "hyphenated_identifier_not_followed_by_word_or_dash"
+pattern = '(?:\B-|\b_|\b)[A-Za-z][\w-]*(?![\w-])'
+input = "    i = 0;"
+expect_error = true
+
+[[test]]
+name = "rust_numeric_literal_suffix_unbounded"
+pattern = '((?:\.\.)?)(?:\b0b\.?|\b|\.)\d[\d_]*(?:(?!\.\.)\.[\d_]*)?(?:e[+-]?\d[\d_]*)?[ulfi]*'
+input = "    encoding = 'utf8';"
+expect_error = true
+
+[[test]]
+name = "ascii_dotted_identifier_before_assignment"
+pattern = '(?:\b|\B\.)[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?=\s+[A-Za-z_]\w*\s*[=;])'
+input = '        <h4 class="d-flex justify-content-between align-items-center mb-3">'
+expect_error = true
+
+[[test]]
+name = "spaces_not_inside_parentheses"
+pattern = '(?<!\([^)]*)\s+'
+input = "> extends ComponentInternalOptions {"
+matches = [[1, 2], [9, 10], [34, 35]]
+
+[[test]]
+name = "numeric_literal_optional_sign_and_exponent"
+pattern = '(?:\b|-)\d*\.?\d+([Ee][+-]?\d+)?\b'
+input = "  this.set('subdomain offset', 2);"
+expect_error = true
+
+[[test]]
+name = "signed_decimal_word_boundary_any_exp"
+pattern = '(?:\B-|\b)\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b'
+input = "    encoding = 'utf8';"
+expect_error = true

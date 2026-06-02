@@ -231,7 +231,6 @@ fn bounded_rep_multiple_at_boundaries() {
 }
 
 #[test]
-#[ignore = "slow in debug; run with --ignored or in release"]
 fn all_accel_skip_patterns_simd_vs_default() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -688,22 +687,6 @@ fn rev_range_skip_size_sweep() {
         }
         assert_simd_eq("[A-Z]+", &hay);
     }
-}
-
-#[test]
-#[ignore = "reimplement prefix selection first"]
-fn range_skip_digit_plus_has_accel() {
-    let re = Regex::with_options("[0-9]+", lazy_opts()).unwrap();
-    let (_fwd, rev) = re.has_accel();
-    assert!(rev, "[0-9]+ should have rev accel");
-}
-
-#[test]
-#[ignore = "reimplement prefix selection first"]
-fn range_skip_uppercase_plus_has_accel() {
-    let re = Regex::with_options("[A-Z]+", lazy_opts()).unwrap();
-    let (_fwd, rev) = re.has_accel();
-    assert!(rev, "[A-Z]+ should have rev accel");
 }
 
 #[test]

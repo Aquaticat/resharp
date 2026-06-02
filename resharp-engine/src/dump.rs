@@ -171,9 +171,21 @@ impl Regex {
             prefix: self.prefix.clone(),
             fwd_begin_anchored: self.fwd_begin_anchored,
             find_all: self.find_all,
-            fwd: if uses_fwd { Some(std::mem::replace(&mut inner.fwd, empty_ldfa())) } else { None },
-            rev_ts: if uses_rev_ts { Some(std::mem::replace(&mut inner.rev_ts, empty_ldfa())) } else { None },
-            bounded: if self.has_bounded { inner.bounded.take() } else { None },
+            fwd: if uses_fwd {
+                Some(std::mem::replace(&mut inner.fwd, empty_ldfa()))
+            } else {
+                None
+            },
+            rev_ts: if uses_rev_ts {
+                Some(std::mem::replace(&mut inner.rev_ts, empty_ldfa()))
+            } else {
+                None
+            },
+            bounded: if self.has_bounded {
+                inner.bounded.take()
+            } else {
+                None
+            },
         };
 
         let out = bincode_cfg()
@@ -181,9 +193,15 @@ impl Regex {
             .map_err(|e| Error::Serialize(format!("bincode: {e}")))?;
 
         // restore moved-out fields so the source regex stays usable
-        if let Some(fwd) = dump.fwd { inner.fwd = fwd; }
-        if let Some(rev_ts) = dump.rev_ts { inner.rev_ts = rev_ts; }
-        if let Some(b) = dump.bounded { inner.bounded = Some(b); }
+        if let Some(fwd) = dump.fwd {
+            inner.fwd = fwd;
+        }
+        if let Some(rev_ts) = dump.rev_ts {
+            inner.rev_ts = rev_ts;
+        }
+        if let Some(b) = dump.bounded {
+            inner.bounded = Some(b);
+        }
         Ok(out)
     }
 
@@ -201,7 +219,11 @@ impl Regex {
                 fwd_ts: empty_ldfa(),
                 rev: None,
                 rev_ts: dump.rev_ts.unwrap_or_else(empty_ldfa),
-                stream: StreamInit { start_node: NodeId::MISSING, seek_fwd: 0, seek_rev: 0 },
+                stream: StreamInit {
+                    start_node: NodeId::MISSING,
+                    seek_fwd: 0,
+                    seek_rev: 0,
+                },
                 nulls: Vec::new(),
                 matches: Vec::<Match>::new(),
                 bounded: dump.bounded,

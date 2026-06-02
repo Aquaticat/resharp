@@ -32,6 +32,10 @@
           "default": false,
           "type": "boolean"
         },
+        "ascii": {
+          "default": false,
+          "type": "boolean"
+        },
         "expect_error": {
           "default": false,
           "type": "boolean"
@@ -69,6 +73,13 @@
           "default": null,
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "supported": {
+          "default": null,
+          "type": [
+            "boolean",
             "null"
           ]
         },

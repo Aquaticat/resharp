@@ -121,14 +121,15 @@ impl Regex {
         }
         let mut inner = self.inner.lock().unwrap();
         let start_node = inner.stream.start_node;
-        let p: Option<accel::FwdPrefixSearch> =
-            prefix::build_fwd_prefix(&mut inner.b, start_node)?;
+        let p: Option<accel::FwdPrefixSearch> = prefix::build_fwd_prefix(&mut inner.b, start_node)?;
         let _ = self.stream_cache.fwd_prefix.set(p);
         Ok(())
     }
 
     pub(crate) fn init_stream(&self) -> Result<(), Error> {
-        if self.stream_cache.fwd_prefix.get().is_some() && self.stream_cache.rev_inited.get().is_some() {
+        if self.stream_cache.fwd_prefix.get().is_some()
+            && self.stream_cache.rev_inited.get().is_some()
+        {
             return Ok(());
         }
         let mut inner = self.inner.lock().unwrap();
@@ -139,12 +140,9 @@ impl Regex {
             let _ = self.stream_cache.fwd_prefix.set(p);
         }
         if self.stream_cache.rev_inited.get().is_none() {
-            let rev = inner
-                .b
-                .reverse(start_node)
-                .map_err(Error::Algebra)?;
+            let rev = inner.b.reverse(start_node).map_err(Error::Algebra)?;
             let rev = inner.b.strip_lb(rev).map_err(Error::Algebra)?;
-            let rev = inner.b.normalize_rev(rev).map_err(Error::Algebra)?;
+            let rev = inner.b.normalize_rev(rev, 0).map_err(Error::Algebra)?;
             let max_cap = inner.fwd.max_capacity;
             inner.rev = Some(engine::LDFA::new_rev(&mut inner.b, rev, max_cap)?);
             let _ = self.stream_cache.rev_inited.set(());
@@ -288,7 +286,11 @@ fn stream_general<const REV: bool, const STOP: bool, F: FnMut(usize, usize)>(
     if STOP && emitted {
         return Ok(());
     }
-    let state = if emitted { engine::DFA_INITIAL as u32 } else { first };
+    let state = if emitted {
+        engine::DFA_INITIAL as u32
+    } else {
+        first
+    };
     stream_feed_loop::<REV, true, STOP, _>(
         inner,
         fwd_prefix,
@@ -301,7 +303,12 @@ fn stream_general<const REV: bool, const STOP: bool, F: FnMut(usize, usize)>(
     Ok(())
 }
 
-fn stream_feed_loop<const REV: bool, const PREFIX: bool, const STOP: bool, F: FnMut(usize, usize)>(
+fn stream_feed_loop<
+    const REV: bool,
+    const PREFIX: bool,
+    const STOP: bool,
+    F: FnMut(usize, usize),
+>(
     inner: &mut crate::RegexInner,
     fwd_prefix: Option<&accel::FwdPrefixSearch>,
     input: &[u8],
@@ -357,7 +364,11 @@ fn stream_feed_loop<const REV: bool, const PREFIX: bool, const STOP: bool, F: Fn
         if STOP && emitted {
             return Ok(engine::DFA_INITIAL as u32);
         }
-        state = if emitted { engine::DFA_INITIAL as u32 } else { next };
+        state = if emitted {
+            engine::DFA_INITIAL as u32
+        } else {
+            next
+        };
     }
     Ok(state)
 }
@@ -389,12 +400,21 @@ impl Regex {
                 if search_start > 0 {
                     on_match(search_start);
                 }
-                return stream_anchored_fwd::<false, _>(self, fp, 0, search_start, input, |_, e| on_match(e));
+                return stream_anchored_fwd::<false, _>(
+                    self,
+                    fp,
+                    0,
+                    search_start,
+                    input,
+                    |_, e| on_match(e),
+                );
             }
             Some(prefix::PrefixKind::AnchoredFwdLb(fp)) => {
                 let lb_len = self.lb_check_bytes as usize;
                 if !self.fwd_lb_begin_nullable {
-                    return stream_anchored_fwd::<false, _>(self, fp, lb_len, 0, input, |_, e| on_match(e));
+                    return stream_anchored_fwd::<false, _>(self, fp, lb_len, 0, input, |_, e| {
+                        on_match(e)
+                    });
                 }
             }
             _ => {}
@@ -640,7 +660,11 @@ impl Regex {
                     Nullability::END,
                     &mut match_start,
                 );
-                let match_start = if match_start == usize::MAX { 0 } else { match_start };
+                let match_start = if match_start == usize::MAX {
+                    0
+                } else {
+                    match_start
+                };
                 return Ok(Some((rev_initial_state, match_start)));
             }
         }

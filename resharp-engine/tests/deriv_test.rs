@@ -53,7 +53,9 @@ fn walk_bytes(
     eprintln!("  [{}] initial pos=0 effects={}", dir, init_eff);
     {
         let nulls_id = b.get_nulls_id(node);
-        for e in b.nulls_entry_vec(nulls_id.0) { got_nulls.push(e.rel as usize); }
+        for e in b.nulls_entry_vec(nulls_id.0) {
+            got_nulls.push(e.rel as usize);
+        }
     }
     for (i, byte) in bytes.iter().enumerate() {
         let der_mask = pos_mask(i, n);
@@ -79,14 +81,18 @@ fn walk_bytes(
         eprintln!("  [{}] after pos={} effects={}", dir, i + 1, eff_str);
         if let Some(exp) = expected_effects.get(i) {
             if exp != "?" {
-                assert_eq!(eff_str, *exp,
+                assert_eq!(
+                    eff_str, *exp,
                     "effects mismatch: name={} dir={} step={} byte='{}'",
-                    name, dir, i, *byte as char);
+                    name, dir, i, *byte as char
+                );
             }
         }
         {
             let nulls_id = b.get_nulls_id(node);
-            for e in b.nulls_entry_vec(nulls_id.0) { got_nulls.push((i + 1) + e.rel as usize); }
+            for e in b.nulls_entry_vec(nulls_id.0) {
+                got_nulls.push((i + 1) + e.rel as usize);
+            }
         }
     }
     if let Some(exp) = expected_nulls {
@@ -106,7 +112,12 @@ fn test_deriv_toml() {
         }
         let mut b = RegexBuilder::new();
         let node = if tc.ascii {
-            let flags = resharp_parser::PatternFlags { unicode: false, full_unicode: false, ascii_perl_classes: true, ..Default::default() };
+            let flags = resharp_parser::PatternFlags {
+                unicode: false,
+                full_unicode: false,
+                ascii_perl_classes: true,
+                ..Default::default()
+            };
             resharp_parser::parse_ast_with(&mut b, &tc.pattern, &flags).unwrap()
         } else {
             resharp_parser::parse_ast(&mut b, &tc.pattern).unwrap()
@@ -114,7 +125,7 @@ fn test_deriv_toml() {
 
         if !tc.rev.is_empty() || tc.rev_nulls.is_some() || !tc.rev_effects.is_empty() {
             let rev = b.reverse(node).unwrap();
-            let rev = b.normalize_rev(rev).unwrap();
+            let rev = b.normalize_rev(rev, 0).unwrap();
             let rev = b.mk_concat(NodeId::TS, rev);
 
             eprintln!(

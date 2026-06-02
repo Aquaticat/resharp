@@ -15,7 +15,10 @@ fn test_rev_nulls_toml() {
             continue;
         }
         let re = Regex::new(&tc.pattern).unwrap_or_else(|e| {
-            panic!("name={} pattern={:?}: compile error: {}", tc.name, tc.pattern, e)
+            panic!(
+                "name={} pattern={:?}: compile error: {}",
+                tc.name, tc.pattern, e
+            )
         });
         let got = re.collect_rev_nulls_debug(tc.input.as_bytes());
         for i in 1..got.len() {

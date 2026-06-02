@@ -221,7 +221,11 @@ pub struct LDFA {
 }
 
 impl LDFA {
-    pub fn new_rev(b: &mut RegexBuilder, initial: NodeId, max_capacity: usize) -> Result<LDFA, Error> {
+    pub fn new_rev(
+        b: &mut RegexBuilder,
+        initial: NodeId,
+        max_capacity: usize,
+    ) -> Result<LDFA, Error> {
         Self::new_inner(b, initial, max_capacity, false)
     }
 
@@ -885,6 +889,7 @@ impl LDFA {
         Ok(max_end)
     }
 
+    /// scan_fwd_all is guaranteed to find a match, given a valid, pre-checked start position
     #[inline(never)]
     pub fn scan_fwd_all(
         &mut self,
@@ -946,7 +951,7 @@ impl LDFA {
                         )
                     };
                 }
-
+                assert_ne!(NO_MATCH, l_max_end, "correctness issue found");
                 matches.push(Match {
                     start: 0,
                     end: l_max_end,
@@ -1305,6 +1310,13 @@ impl LDFA {
         data: &[u8],
         nulls: &mut Vec<usize>,
     ) -> Result<(), Error> {
+        #[cfg(feature = "debug")]
+        {
+            let node = self.state_nodes[DFA_INITIAL as usize];
+            let eid = self.effects_id[DFA_INITIAL as usize];
+            eprintln!("[rev0] eid={eid} node={}", b.pp(node));
+        }
+
         let mut curr = self.begin_table[self.mt_lookup[data[start_pos] as usize] as usize] as u32;
         if data.len() == 1 {
             return self.len_1_rev(curr, nulls);
@@ -1317,6 +1329,16 @@ impl LDFA {
             Nullability::CENTER,
             nulls,
         );
+
+        #[cfg(feature = "debug")]
+        {
+            let node = self.state_nodes[curr as usize];
+            let eid = self.effects_id[curr as usize];
+            eprintln!(
+                "[rev pos={start_pos}] state={curr} eid={eid} node={} nulls={nulls:?}",
+                b.pp(node)
+            );
+        }
 
         if let Some(preskip) = self.prefix_skip.as_ref() {
             return self.collect_rev_prefix::<EARLY_EXIT>(
@@ -1373,6 +1395,15 @@ impl LDFA {
                 Nullability::CENTER
             };
             collect_nulls(&self.effects_id, &self.effects, curr, pos, mask, nulls);
+            #[cfg(feature = "debug")]
+            {
+                let node = self.state_nodes[curr as usize];
+                let eid = self.effects_id[curr as usize];
+                eprintln!(
+                    "[rev pos={pos}] state={curr} eid={eid} node={} nulls={nulls:?}",
+                    b.pp(node)
+                );
+            }
             if EARLY_EXIT && !nulls.is_empty() {
                 return Ok(());
             }
@@ -1392,7 +1423,6 @@ impl LDFA {
     ) -> Result<(), Error> {
         let mut curr = start_state;
         let mut pos = start_pos;
-
         if cfg!(feature = "debug") {
             // eprintln!("  [rev_prefix] after_collect_nulls nulls={:?}", nulls);
         }
@@ -1440,6 +1470,25 @@ impl LDFA {
     ) -> Result<(), Error> {
         let mt = self.mt_lookup[data[0] as usize] as u32;
         let new_state = self.lazy_transition(b, sid, mt)?;
+        #[cfg(feature = "debug")]
+        {
+            let node = self.state_nodes[sid as usize];
+            let eid = self.effects_id[sid as usize];
+            eprintln!(
+                "[pre end] state={new_state} eid={eid} node={} nulls={nulls:?}",
+                b.pp(node)
+            );
+        }
+        #[cfg(feature = "debug")]
+        {
+            let node = self.state_nodes[new_state as usize];
+            let eid = self.effects_id[new_state as usize];
+            eprintln!(
+                "[rev end] state={new_state} eid={eid} node={} nulls={nulls:?}",
+                b.pp(node)
+            );
+        }
+
         let effect = self.effects_id[new_state as usize] as u32;
         collect_rev_complex(self.effects.as_ptr(), effect, 0, Nullability::END, nulls);
         Ok(())
@@ -1638,6 +1687,7 @@ pub(crate) fn collect_max_rev(
 }
 
 #[inline(never)]
+#[cfg_attr(not(feature = "debug"), allow(unused_variables))]
 fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool, const INITIAL_SKIP: bool>(
     t: &ScanTables,
     skip_ids: &[u8],
@@ -1654,7 +1704,7 @@ fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool, const INITIAL_SKIP: boo
     let minterms_lookup = t.minterms_lookup;
     let mt_log = t.mt_log;
     while pos > 1 {
-        if SKIP {
+        if false && SKIP {
             let sid = skip_ids[curr as usize];
             if sid != 0 {
                 if INITIAL_SKIP && curr == pruned_id {
@@ -1674,6 +1724,10 @@ fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool, const INITIAL_SKIP: boo
                                         nulls,
                                     );
                                 }
+                                // not necessary
+                                // if skip_pos == 0 {
+                                //     continue;
+                                // }
                             }
                         }
                         None => {
@@ -1683,32 +1737,19 @@ fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool, const INITIAL_SKIP: boo
                     }
                 } else {
                     let searcher = &skip_searchers[sid as usize - 1];
-                    match searcher.find_rev(&data[..pos]) {
-                        Some(skip_pos) => {
-                            debug_assert!(pos != skip_pos);
-                            let eid = unsafe { *center_effect_id.add(curr as usize) };
-                            if eid == EID_NONE as _ {
-                            } else if eid == EID_CENTER0 as _ {
-                                nulls.extend((skip_pos + 1..pos).rev());
-                            } else {
-                                for p in (skip_pos + 1..pos).rev() {
-                                    collect_rev_center_simple(t.effects, eid as u32, p, nulls);
-                                }
-                            }
-                            pos = skip_pos + 1;
+                    let lo = searcher.find_rev(&data[..pos]).unwrap_or(0);
+                    let eid = unsafe { *center_effect_id.add(curr as usize) };
+                    if eid == EID_NONE as _ {
+                    } else if eid == EID_CENTER0 as _ {
+                        nulls.extend((lo + 1..pos).rev());
+                    } else {
+                        for p in (lo + 1..pos).rev() {
+                            collect_rev_center_simple(t.effects, eid as u32, p, nulls);
                         }
-                        None => {
-                            let eid = unsafe { *center_effect_id.add(curr as usize) };
-                            if eid == EID_NONE as _ {
-                            } else if eid == EID_CENTER0 as _ {
-                                nulls.extend((0 + 1..pos).rev());
-                            } else {
-                                for p in (0 + 1..pos).rev() {
-                                    collect_rev_center_simple(t.effects, eid as u32, p, nulls);
-                                }
-                            }
-                            pos = 1
-                        }
+                    }
+                    pos = lo + 1;
+                    if lo == 0 {
+                        continue;
                     }
                 }
             }
@@ -1722,15 +1763,17 @@ fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool, const INITIAL_SKIP: boo
             }
             curr = next as u32;
             let eid = *center_effect_id.add(curr as usize);
-            if eid == EID_CENTER0 as _ {
-                nulls.push(pos);
-                if EARLY_EXIT {
-                    return (curr, pos, false);
-                }
-            } else if eid != EID_NONE as _ {
-                collect_rev_center_simple(t.effects, eid as u32, pos, nulls);
-                if EARLY_EXIT && !nulls.is_empty() {
-                    return (curr, pos, false);
+            if eid != EID_NONE as _ {
+                if eid == EID_CENTER0 as _ {
+                    nulls.push(pos);
+                    if EARLY_EXIT {
+                        return (curr, pos, false);
+                    }
+                } else {
+                    collect_rev_center_simple(t.effects, eid as u32, pos, nulls);
+                    if EARLY_EXIT && !nulls.is_empty() {
+                        return (curr, pos, false);
+                    }
                 }
             }
         }
@@ -1778,6 +1821,16 @@ unsafe fn fwd_update<const IS_END: bool>(
     }
 }
 
+#[inline(always)]
+unsafe fn skip_find_fwd(
+    searcher: &MintermSearchValue,
+    data: *const u8,
+    pos: usize,
+    end: usize,
+) -> Option<usize> {
+    searcher.find_fwd(std::slice::from_raw_parts(data.add(pos), end - pos))
+}
+
 #[inline(never)]
 fn scan_fwd_verify<const SKIP: bool>(
     t: &ScanTables,
@@ -1803,8 +1856,7 @@ fn scan_fwd_verify<const SKIP: bool>(
                 let sid = skip_ids[curr as usize];
                 if sid != 0 {
                     let searcher = &skip_searchers[sid as usize - 1];
-                    let haystack = unsafe { std::slice::from_raw_parts(data.add(pos), end - pos) };
-                    match searcher.find_fwd(haystack) {
+                    match unsafe { skip_find_fwd(searcher, data, pos, end) } {
                         Some(offset) => {
                             if offset > 0 {
                                 unsafe {
@@ -1914,8 +1966,7 @@ fn scan_fwd_first_null<const SKIP: bool>(
             let sid = skip_ids[curr as usize];
             if sid != 0 {
                 let searcher = &skip_searchers[sid as usize - 1];
-                let haystack = unsafe { std::slice::from_raw_parts(data.add(pos), end - pos) };
-                match searcher.find_fwd(haystack) {
+                match unsafe { skip_find_fwd(searcher, data, pos, end) } {
                     Some(offset) => {
                         pos += offset;
                     }
@@ -1983,8 +2034,7 @@ fn scan_fwd<const SKIP: bool>(
                     let sid = skip_ids[l_state as usize];
                     if sid != 0 {
                         let searcher = &skip_searchers[sid as usize - 1];
-                        let haystack = std::slice::from_raw_parts(data.add(l_pos), end - l_pos);
-                        match searcher.find_fwd(haystack) {
+                        match skip_find_fwd(searcher, data, l_pos, end) {
                             Some(offset) => {
                                 if offset > 0 {
                                     max_end = fwd_update::<false>(

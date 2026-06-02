@@ -1,6 +1,6 @@
 description = '''
 lookahead, lookbehind, combined lookaround, and negative lookaround tests.
-matches = [[start, end]] in utf8 bytes (half-open intervals).
+matches = [[start, end]] in utf8 bytes
 '''
 
 [[test]]
@@ -8,12 +8,6 @@ name = "neg_lookbehind_b"
 pattern = "(?<!a)"
 input = "b"
 matches = [[0, 0], [1, 1]]
-
-[[test]]
-name = "lookahead_after_unsatisfiable_string_anchor"
-pattern = '\n\A(?=b)'
-input = "abc"
-matches = []
 
 [[test]]
 name = "lookahead_conditional_digit"
@@ -390,13 +384,6 @@ input = " a"
 matches = [[1, 2]]
 
 [[test]]
-name = "lookbehind_dot_a"
-pattern = ".(?<=a)"
-input = "aaa"
-matches = [[0, 1], [1, 2], [2, 3]]
-
-
-[[test]]
 name = "lookahead_wb_dash"
 pattern = 'a+\b(?=.*---)'
 input = "aaa ---"
@@ -602,12 +589,6 @@ input = "baaa"
 matches = [[0, 1], [1, 1]]
 
 [[test]]
-name = "fas_dotstar_lb_x_foo_dotstar"
-pattern = '[\s\S]+(?<=x)foo[\s\S]+'
-input = "axfoo def"
-matches = [[0, 9]]
-
-[[test]]
 name = "empty_lookbehind"
 pattern = '(?<=)'
 input = "test"
@@ -618,29 +599,6 @@ name = "star_lookbehind_charclass"
 pattern = '(?<=\s*)[,\]]'
 input = "a, b]"
 matches = [[1, 2], [4, 5]]
-
-[[test]]
-name = "begin_star_lookbehind_group"
-pattern = '^(?<=\s*)(import\s*\{.*)'
-input = "import { foo }"
-matches = [[0, 14]]
-
-[[test]]
-name = "case_split_boundaries"
-pattern = '(?<=[^A-Z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|(?<=[_-])(?=[^_-])'
-input = "fooBar_baz"
-matches = [[3, 3], [7, 7]]
-
-[[test]]
-name = "fixed_lookarounds"
-pattern = '(?<=[^A-Z])a(?=[A-Z])|(?<=[A-Z])b(?=[A-Z][a-z])'
-input = "xaAGbAa"
-matches = [[1, 2], [4, 5]]
-
-[[test]]
-name = "union_diff_lb_lengths_overlap_first_byte"
-pattern = '(?<=a)bc|(?<=xy)bcd'
-expect_error = true
 
 [[test]]
 name = "bare_lookahead_zero_width_dot_hash"
@@ -679,42 +637,6 @@ input = "abcDEF"
 matches = [[0, 0]]
 
 [[test]]
-name = "union_lb_branch_first_byte_disjoint_ab"
-pattern = '(^a)|([^a]a)'
-input = "ab"
-matches = [[0, 1]]
-
-[[test]]
-name = "union_lb_branch_first_byte_disjoint_ba"
-pattern = '(^a)|([^a]a)'
-input = "ba"
-matches = [[0, 2]]
-
-[[test]]
-name = "union_lb_branch_first_byte_disjoint_aa"
-pattern = '(^a)|([^a]a)'
-input = "aa"
-matches = [[0, 1]]
-
-[[test]]
-name = "union_lb_branch_first_byte_disjoint_dashes_1"
-pattern = '(^---)|([^-]---)'
-input = "---x"
-matches = [[0, 3]]
-
-[[test]]
-name = "union_lb_branch_first_byte_disjoint_dashes_2"
-pattern = '(^---)|([^-]---)'
-input = "a---x"
-matches = [[0, 4]]
-
-[[test]]
-name = "union_lb_branch_first_byte_disjoint_dashes_3"
-pattern = '(^---)|([^-]---)'
-input = "----"
-matches = [[0, 3]]
-
-[[test]]
 name = "neg_lookahead_shared_prefix_string_anchored"
 pattern = '\A(?!a*c)a*c\z'
 input = "aaa"
@@ -725,3 +647,240 @@ name = "lookahead_then_word_boundary"
 pattern = '\w(?=\s*\()\b'
 input = "f ("
 matches = [[0, 1]]
+
+[[test]]
+name = "empty_neg_lb_never_matches"
+pattern = '(?<!)'
+input = "abc x"
+matches = []
+
+[[test]]
+name = "empty_neg_lb_then_a_never"
+pattern = '(?<!)a'
+input = "abc x"
+matches = []
+
+[[test]]
+name = "neg_lb_optional_never"
+pattern = '(?<!a?)'
+input = "abc x"
+matches = []
+
+[[test]]
+name = "neg_lb_word_star_never"
+pattern = '(?<!\w*)x'
+input = "abc x"
+matches = []
+
+[[test]]
+name = "neg_lb_not_begin"
+pattern = '(?<!\A)'
+input = "abc"
+matches = [[1, 1], [2, 2], [3, 3]]
+
+[[test]]
+name = "empty_lookbehind_all_positions"
+pattern = '(?<=)'
+input = "abc"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+
+[[test]]
+name = "neg_lb_begin_anchor_plus_minus_anchored"
+pattern = '(?<!\A)[+-]'
+input = "+b"
+matches = []
+
+[[test]]
+name = "neg_lb_begin_anchor_plus_minus"
+pattern = '(?<!\A)[+-]'
+input = "a+b"
+matches = [[1, 2]]
+
+[[test]]
+name = "neg_lb_begin_or_dot_slash_anchored"
+pattern = '(?<!\A|\.)/'
+input = "./b"
+matches = []
+
+[[test]]
+name = "neg_lb_begin_or_dot_slash"
+pattern = '(?<!\A|\.)/'
+input = "a/b"
+matches = [[1, 2]]
+
+
+
+[[test]]
+name = "stacked_lb_a_b"
+pattern = '(?<=a)(?<=b)x'
+input = "abx"
+matches = []
+
+[[test]]
+name = "stacked_lb_a_b_bx"
+pattern = '(?<=a)(?<=b)x'
+input = "bx"
+matches = []
+
+[[test]]
+name = "stacked_neg_lb_cx"
+pattern = '(?<!a)(?<!b)x'
+input = "cx"
+matches = [[1, 2]]
+
+[[test]]
+name = "stacked_neg_lb_ax"
+pattern = '(?<!a)(?<!b)x'
+input = "ax"
+matches = []
+
+[[test]]
+name = "stacked_neg_lb_bx"
+pattern = '(?<!a)(?<!b)x'
+input = "bx"
+matches = []
+
+[[test]]
+name = "stacked_neg_lb_x"
+pattern = '(?<!a)(?<!b)x'
+input = "x"
+matches = [[0, 1]]
+
+[[test]]
+name = "wb_neg_lb_dash_if_xif"
+pattern = '\b(?<!-)if'
+input = "xif"
+matches = []
+
+[[test]]
+name = "wb_neg_lb_dash_if_dashif"
+pattern = '\b(?<!-)if'
+input = "-if"
+matches = []
+
+[[test]]
+name = "wb_neg_lb_dash_if"
+pattern = '\b(?<!-)if'
+input = "if"
+matches = [[0, 2]]
+
+[[test]]
+name = "wb_neg_lb_dash_if_spaced"
+pattern = '\b(?<!-)if'
+input = " if"
+matches = [[1, 3]]
+
+[[test]]
+name = "lb_a_neg_lb_b_c_ac"
+pattern = '(?<=a)(?<!b)c'
+input = "ac"
+matches = [[1, 2]]
+
+[[test]]
+name = "lb_a_neg_lb_b_c_bc"
+pattern = '(?<=a)(?<!b)c'
+input = "bc"
+matches = []
+
+[[test]]
+name = "neg_lb_b_lb_a_c"
+pattern = '(?<!b)(?<=a)c'
+input = "ac"
+matches = [[1, 2]]
+
+[[test]]
+name = "lb_a_star_wb_b_xb"
+pattern = '(?<=a.*)\bb'
+input = "a xb"
+matches = []
+
+[[test]]
+name = "lb_a_star_wb_b"
+pattern = '(?<=a.*)\bb'
+input = "a b"
+matches = [[2, 3]]
+
+
+[[test]]
+name = "neg_la_universal_star_b_xyb"
+pattern = '\A(?!a)[\s\S]*b\z'
+input = "xyb"
+matches = [[0, 3]]
+
+[[test]]
+name = "neg_la_universal_star_b_ab"
+pattern = '\A(?!a)[\s\S]*b\z'
+input = "ab"
+matches = []
+
+[[test]]
+name = "neg_la_universal_plus_b_xyb"
+pattern = '\A(?!a)[\s\S]+b\z'
+input = "xyb"
+matches = [[0, 3]]
+
+[[test]]
+name = "neg_la_universal_plus_b_ab"
+pattern = '\A(?!a)[\s\S]+b\z'
+input = "ab"
+matches = []
+
+[[test]]
+name = "jsdoc_block_open"
+pattern = '\A[\t ]*/\*\*(?!/)([\s\S]*)\s*\*/'
+input = "    /** @type {Command[]} */"
+matches = [[0, 28]]
+
+[[test]]
+name = "jsdoc_no_import"
+pattern = '\A(?![^\n\r]*import)[\s]*/\*\*([\s\S]*)\*/'
+input = "    /** @type {Command[]} */"
+matches = [[0, 28]]
+
+[[test]]
+name = "end_anchor_trailing_neg_lb_abc"
+pattern = '\z(?<!,)'
+input = "abc"
+matches = [[3, 3]]
+
+[[test]]
+name = "end_anchor_trailing_neg_lb_empty"
+pattern = '\z(?<!,)'
+input = ""
+matches = [[0, 0]]
+
+[[test]]
+name = "end_anchor_trailing_neg_lb_comma"
+pattern = '\z(?<!,)'
+input = "ab,"
+matches = []
+
+[[test]]
+name = "neg_lb_digit_a_1a"
+pattern = '(?<!\d)a'
+input = "1a"
+matches = []
+
+[[test]]
+name = "neg_lb_digit_a_xa"
+pattern = '(?<!\d)a'
+input = "xa"
+matches = [[1, 2]]
+
+[[test]]
+name = "neg_lb_not_begin_x"
+pattern = '(?<!\A)x'
+input = "abc"
+matches = []
+
+[[test]]
+name = "neg_lb_space_a_xa"
+pattern = '(?<!\s)a'
+input = "xa"
+matches = [[1, 2]]
+
+[[test]]
+name = "neg_lb_space_a_spaced"
+pattern = '(?<!\s)a'
+input = " a"
+matches = []

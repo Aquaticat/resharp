@@ -602,7 +602,11 @@ impl RevTeddySearch {
         }
     }
 
-    unsafe fn teddy_rev<const N: usize>(t: &RevTeddyInner, haystack: &[u8], end: usize) -> Option<usize> {
+    unsafe fn teddy_rev<const N: usize>(
+        t: &RevTeddyInner,
+        haystack: &[u8],
+        end: usize,
+    ) -> Option<usize> {
         let ptr = haystack.as_ptr();
         let nib = u8x16_splat(0x0F);
         let masks_lo = [

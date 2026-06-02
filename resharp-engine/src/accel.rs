@@ -29,7 +29,10 @@ impl MintermSearchValue {
 }
 
 #[cfg_attr(debug_assertions, derive(Debug))]
-#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize, Clone))]
+#[cfg_attr(
+    feature = "serialize",
+    derive(serde::Serialize, serde::Deserialize, Clone)
+)]
 pub enum FwdPrefixSearch {
     Literal(crate::simd::FwdLiteralSearch),
     Prefix(crate::simd::FwdPrefixSearch),

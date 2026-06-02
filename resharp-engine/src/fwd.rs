@@ -1,7 +1,11 @@
 use crate::{accel::FwdPrefixSearch, engine, Error, Match, Regex};
 
 impl Regex {
-    pub(crate) fn find_all_fwd_prefix(&self, fwd_prefix: &FwdPrefixSearch, input: &[u8]) -> Result<Vec<Match>, Error> {
+    pub(crate) fn find_all_fwd_prefix(
+        &self,
+        fwd_prefix: &FwdPrefixSearch,
+        input: &[u8],
+    ) -> Result<Vec<Match>, Error> {
         let inner = &mut *self.inner.lock().unwrap();
         let matches = &mut inner.matches;
         matches.clear();
@@ -54,7 +58,11 @@ impl Regex {
         Ok(matches.clone())
     }
 
-    pub(crate) fn is_match_fwd_prefix(&self, fwd_prefix: &FwdPrefixSearch, input: &[u8]) -> Result<bool, Error> {
+    pub(crate) fn is_match_fwd_prefix(
+        &self,
+        fwd_prefix: &FwdPrefixSearch,
+        input: &[u8],
+    ) -> Result<bool, Error> {
         let inner = &mut *self.inner.lock().unwrap();
         let prefix_len = fwd_prefix.len();
         {
@@ -73,12 +81,10 @@ impl Regex {
                 .fwd
                 .walk_input(&mut inner.b, candidate, prefix_len, input)?;
             if state != 0 {
-                let max_end = inner.fwd.scan_fwd_from(
-                    &mut inner.b,
-                    state,
-                    candidate + prefix_len,
-                    input,
-                )?;
+                let max_end =
+                    inner
+                        .fwd
+                        .scan_fwd_from(&mut inner.b, state, candidate + prefix_len, input)?;
                 if max_end != engine::NO_MATCH && max_end > candidate {
                     return Ok(true);
                 }
@@ -88,7 +94,11 @@ impl Regex {
         Ok(false)
     }
 
-    pub(crate) fn is_match_fwd_lb_prefix(&self, fwd_prefix: &FwdPrefixSearch, input: &[u8]) -> Result<bool, Error> {
+    pub(crate) fn is_match_fwd_lb_prefix(
+        &self,
+        fwd_prefix: &FwdPrefixSearch,
+        input: &[u8],
+    ) -> Result<bool, Error> {
         let inner = &mut *self.inner.lock().unwrap();
         let lb_len = self.lb_check_bytes as usize;
         if self.fwd_lb_begin_nullable && !input.is_empty() {
@@ -114,7 +124,11 @@ impl Regex {
         Ok(false)
     }
 
-    pub(crate) fn find_all_fwd_lb_prefix(&self, fwd_prefix: &FwdPrefixSearch, input: &[u8]) -> Result<Vec<Match>, Error> {
+    pub(crate) fn find_all_fwd_lb_prefix(
+        &self,
+        fwd_prefix: &FwdPrefixSearch,
+        input: &[u8],
+    ) -> Result<Vec<Match>, Error> {
         let inner = &mut *self.inner.lock().unwrap();
         inner.matches.clear();
         let lb_len = self.lb_check_bytes as usize;

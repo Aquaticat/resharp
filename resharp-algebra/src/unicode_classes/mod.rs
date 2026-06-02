@@ -115,7 +115,10 @@ impl UnicodeClassCache {
         if self.wb != NodeId::MISSING {
             return;
         }
-        debug_assert!(self.word != NodeId::MISSING, "call ensure_word(_full|_ascii) first");
+        debug_assert!(
+            self.word != NodeId::MISSING,
+            "call ensure_word(_full|_ascii) first"
+        );
         let w = self.word;
         let lb_w = b.mk_lookbehind(w, NodeId::MISSING);
         let lb_nw = b.mk_neg_lookbehind(w);

@@ -132,7 +132,10 @@ impl RevSearchBytes {
 
 #[cfg(target_arch = "x86_64")]
 #[cfg_attr(debug_assertions, derive(Debug))]
-#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize, Clone))]
+#[cfg_attr(
+    feature = "serialize",
+    derive(serde::Serialize, serde::Deserialize, Clone)
+)]
 pub struct FwdLiteralSearch {
     pub(crate) needle: Vec<u8>,
     pub(crate) chunks: Vec<u64>,
@@ -330,9 +333,14 @@ impl RevLiteralInner {
             let mut ci = if rare_idx == 0 { 1 } else { 0 };
             let mut cf = BYTE_FREQ[needle[ci] as usize];
             for (i, &b) in needle.iter().enumerate() {
-                if i == rare_idx { continue; }
+                if i == rare_idx {
+                    continue;
+                }
                 let f = BYTE_FREQ[b as usize];
-                if f < cf { cf = f; ci = i; }
+                if f < cf {
+                    cf = f;
+                    ci = i;
+                }
             }
             ci
         } else {
@@ -375,19 +383,22 @@ impl RevLiteralInner {
             let mut off = 0;
             while off + 8 <= n {
                 let h = (hp.add(off) as *const u64).read_unaligned();
-                if h != self.chunks[ci] { return false; }
+                if h != self.chunks[ci] {
+                    return false;
+                }
                 ci += 1;
                 off += 8;
             }
             if off < n {
                 let h = (hp.add(off) as *const u64).read_unaligned();
                 let mask = (1u64 << ((n - off) * 8)) - 1;
-                if (h ^ self.chunks[ci]) & mask != 0 { return false; }
+                if (h ^ self.chunks[ci]) & mask != 0 {
+                    return false;
+                }
             }
         }
         true
     }
-
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -430,7 +441,9 @@ impl RevLiteralInner {
                     return Some(start + nlen - 1);
                 }
             }
-            if pos == min_rare_pos { break; }
+            if pos == min_rare_pos {
+                break;
+            }
             pos -= 1;
         }
         None
@@ -447,7 +460,9 @@ impl RevLiteralInner {
     unsafe fn find_rev_neon(&self, haystack: &[u8], end: usize) -> Option<usize> {
         use std::arch::aarch64::*;
         let nlen = self.needle.len();
-        if end + 1 < nlen { return None; }
+        if end + 1 < nlen {
+            return None;
+        }
         let ptr = haystack.as_ptr();
         let rare_idx = self.rare_idx;
         let rare_byte = self.rare_byte;
@@ -476,7 +491,9 @@ impl RevLiteralInner {
                     return Some(start + nlen - 1);
                 }
             }
-            if pos == min_rare_pos { break; }
+            if pos == min_rare_pos {
+                break;
+            }
             pos -= 1;
         }
         None
@@ -492,7 +509,9 @@ impl RevLiteralInner {
     fn find_rev_wasm(&self, haystack: &[u8], end: usize) -> Option<usize> {
         use core::arch::wasm32::*;
         let nlen = self.needle.len();
-        if end + 1 < nlen { return None; }
+        if end + 1 < nlen {
+            return None;
+        }
         let ptr = haystack.as_ptr();
         let rare_idx = self.rare_idx;
         let rare_byte = self.rare_byte;
@@ -508,7 +527,8 @@ impl RevLiteralInner {
                 let bit = 15 - (mask.leading_zeros() as usize);
                 let start = pos - 15 + bit - rare_idx;
                 unsafe {
-                    if *ptr.add(start + confirm_idx) == confirm_byte && self.verify(haystack, start) {
+                    if *ptr.add(start + confirm_idx) == confirm_byte && self.verify(haystack, start)
+                    {
                         return Some(start + nlen - 1);
                     }
                 }
@@ -520,11 +540,14 @@ impl RevLiteralInner {
             loop {
                 if *ptr.add(pos) == rare_byte {
                     let start = pos - rare_idx;
-                    if *ptr.add(start + confirm_idx) == confirm_byte && self.verify(haystack, start) {
+                    if *ptr.add(start + confirm_idx) == confirm_byte && self.verify(haystack, start)
+                    {
                         return Some(start + nlen - 1);
                     }
                 }
-                if pos == min_rare_pos { break; }
+                if pos == min_rare_pos {
+                    break;
+                }
                 pos -= 1;
             }
         }
@@ -588,6 +611,7 @@ impl RevTeddySearch {
         }
     }
 
+    #[cfg(feature = "convergence_prefix")]
     pub fn add_tail_offset(mut self, extra: u32) -> Self {
         match &mut self.inner {
             RevSearchInner::Teddy(t) => t.tail_offset += extra as usize,
@@ -596,6 +620,7 @@ impl RevTeddySearch {
         self
     }
 
+    #[cfg(feature = "convergence_prefix")]
     pub fn len(&self) -> usize {
         match &self.inner {
             RevSearchInner::Teddy(t) => t.len,
@@ -630,7 +655,11 @@ impl RevTeddySearch {
     }
 
     #[target_feature(enable = "avx2")]
-    unsafe fn teddy_rev<const N: usize>(t: &RevTeddyInner, haystack: &[u8], end: usize) -> Option<usize> {
+    unsafe fn teddy_rev<const N: usize>(
+        t: &RevTeddyInner,
+        haystack: &[u8],
+        end: usize,
+    ) -> Option<usize> {
         let ptr = haystack.as_ptr();
         let nib = _mm256_set1_epi8(0x0F);
         let sets_ptr = t.sets.as_ptr();
@@ -734,7 +763,10 @@ impl RevTeddySearch {
 
 #[cfg(target_arch = "x86_64")]
 #[cfg_attr(debug_assertions, derive(Debug))]
-#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize, Clone))]
+#[cfg_attr(
+    feature = "serialize",
+    derive(serde::Serialize, serde::Deserialize, Clone)
+)]
 pub struct FwdPrefixSearch {
     pub(crate) len: usize,
     pub(crate) num_simd: usize,
@@ -745,7 +777,10 @@ pub struct FwdPrefixSearch {
 
 #[repr(align(32))]
 #[cfg_attr(debug_assertions, derive(Debug))]
-#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize, Clone))]
+#[cfg_attr(
+    feature = "serialize",
+    derive(serde::Serialize, serde::Deserialize, Clone)
+)]
 pub(crate) struct TeddyMasks {
     pub(crate) lo: [[u8; 32]; 3],
     pub(crate) hi: [[u8; 32]; 3],
@@ -1003,7 +1038,10 @@ impl FwdPrefixSearch {
 
 #[cfg(target_arch = "x86_64")]
 #[cfg_attr(debug_assertions, derive(Debug))]
-#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize, Clone))]
+#[cfg_attr(
+    feature = "serialize",
+    derive(serde::Serialize, serde::Deserialize, Clone)
+)]
 pub struct FwdRangeSearch {
     pub(crate) len: usize,
     pub(crate) anchor_pos: usize,

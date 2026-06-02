@@ -25,8 +25,7 @@
     "InternalCase": {
       "type": "object",
       "required": [
-        "pattern",
-        "pp"
+        "pattern"
       ],
       "properties": {
         "name": {
@@ -37,7 +36,10 @@
           "type": "string"
         },
         "pp": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "ts_rev": {
           "type": [

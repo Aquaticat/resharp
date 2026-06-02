@@ -1,6 +1,11 @@
 description = '''
 tests for auto-hardening heuristic
 '''
+
+[[test]]
+pattern = '^\s*(/)?([a-z]+)\s*(?::([\s\S]*))?$'
+hardened = false
+
 [[test]]
 pattern = '\[[^\]]*\]'
 hardened = false
@@ -68,10 +73,6 @@ hardened = false
 
 [[test]]
 pattern = 'Sherlock|Holmes|Watson'
-hardened = false
-
-[[test]]
-pattern = '^\s*(/)?([a-z]+)\s*(?::([\s\S]*))?$'
 hardened = false
 
 [[test]]

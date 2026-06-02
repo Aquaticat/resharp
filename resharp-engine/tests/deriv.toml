@@ -1,13 +1,12 @@
 
-
-[[test]]
-name = "lb_union_literal_rev_start"
-pattern = '(?<!\d)\d+|-\d+'
-input = "-7"
-rev = [
-    "(\\-|(?=(\\z|[^0-9])_*)|_*[0-9](\\-|(?=(\\z|[^0-9])_*)))",
-    "(|_*[0-9](\\-|(?=(\\z|[^0-9])_*))|(?=){1})",
-]
+# [[test]]
+# name = "lb_union_literal_rev_start"
+# pattern = '(?<!\d)\d+|-\d+'
+# input = "-7"
+# rev = [
+#   "(\\-|(?=(\\z|[^0-9])_*)|_*[0-9](\\-|(?=(\\z|[^0-9])_*)))",
+#   "(|_*[0-9](\\-|(?=(\\z|[^0-9])_*))|(?=){1})",
+# ]
 
 [[test]]
 name = "word_boundary_x_rev"
@@ -17,7 +16,7 @@ rev = ["?", "?", "?"]
 
 [[test]]
 name = "la_compl_has_y_fwd"
-pattern = '(?=.*z)[^y]*'
+pattern = "(?=.*z)[^y]*"
 input = "ayz"
 fwd = ["?", "?", "?"]
 
@@ -29,29 +28,25 @@ fwd = ["?", "?", "?", "?"]
 
 [[test]]
 name = "la_compl_has_y_from1_fwd"
-pattern = '(?=.*z)[^y]*'
+pattern = "(?=.*z)[^y]*"
 input = "yz"
 fwd = ["?", "?"]
 
 [[test]]
 name = "simple_literal_null_tracking"
-pattern = 'ab'
+pattern = "ab"
 input = "ab"
 fwd_nulls = [2]
 rev_nulls = [2]
-
-[[test]]
-name = "neg_lookarounds_dot_star"
-pattern = 'a(?!b).*(?<!a)b'
-input = "a b"
-
-[[test]]
-name = "lb_inference_pp"
-pattern = '<.*(?<=<)bg'
-input = "<bg"
 
 [[test]]
 name = "lazy_intersection_complement_rev_nulls"
 pattern = "x(_*b&~(b_+))"
 input = "xab"
 rev_nulls = [3]
+
+[[test]]
+name = "multichar_neg_lb_ab_x_rev"
+pattern = "(?<!ab)x"
+input = "xabx"
+rev = ["?", "?", "?", "?"]

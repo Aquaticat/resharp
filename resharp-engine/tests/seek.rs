@@ -34,7 +34,11 @@ fn seek_fwd_walks_all_matches() {
 fn seek_rev_walks_all_matches_rightmost_first() {
     let re = Regex::new(r"\bERROR\b").unwrap();
     let (input, expected_ends) = build_input();
-    let expected_starts: Vec<usize> = expected_ends.iter().rev().map(|e| e - "ERROR".len()).collect();
+    let expected_starts: Vec<usize> = expected_ends
+        .iter()
+        .rev()
+        .map(|e| e - "ERROR".len())
+        .collect();
 
     let mut state = Regex::SEEK_INITIAL;
     let mut pos = input.len();
@@ -66,8 +70,14 @@ fn seek_fwd_respects_word_boundary() {
 fn seek_fwd_from_offset_skips_earlier_matches() {
     let re = Regex::new(r"\bERROR\b").unwrap();
     let input = b"ERROR aaa ERROR bbb ERROR";
-    assert!(matches!(re.seek_fwd(input, Regex::SEEK_INITIAL, 6).unwrap(), Some((_, 15))));
-    assert!(matches!(re.seek_fwd(input, Regex::SEEK_INITIAL, 16).unwrap(), Some((_, 25))));
+    assert!(matches!(
+        re.seek_fwd(input, Regex::SEEK_INITIAL, 6).unwrap(),
+        Some((_, 15))
+    ));
+    assert!(matches!(
+        re.seek_fwd(input, Regex::SEEK_INITIAL, 16).unwrap(),
+        Some((_, 25))
+    ));
     assert_eq!(re.seek_fwd(input, Regex::SEEK_INITIAL, 25).unwrap(), None);
 }
 
@@ -75,7 +85,10 @@ fn seek_fwd_from_offset_skips_earlier_matches() {
 fn seek_rev_from_offset_skips_later_matches() {
     let re = Regex::new(r"\bERROR\b").unwrap();
     let input = b"ERROR aaa ERROR bbb ERROR";
-    assert!(matches!(re.seek_rev(input, Regex::SEEK_INITIAL, 10).unwrap(), Some((_, 0))));
+    assert!(matches!(
+        re.seek_rev(input, Regex::SEEK_INITIAL, 10).unwrap(),
+        Some((_, 0))
+    ));
     // assert!(matches!(re.seek_rev(input, Regex::SEEK_INITIAL, 25).unwrap(), Some((_, 20))));
     // assert!(matches!(re.seek_rev(input, Regex::SEEK_INITIAL, 20).unwrap(), Some((_, 10))));
     assert_eq!(re.seek_rev(input, Regex::SEEK_INITIAL, 0).unwrap(), None);
