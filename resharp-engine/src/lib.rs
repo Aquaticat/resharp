@@ -938,6 +938,11 @@ impl Regex {
             } else {
                 resharp_parser::DEFAULT_MAX_REPEAT
             },
+            max_depth: if opts.unbounded_size {
+                usize::MAX
+            } else {
+                resharp_parser::DEFAULT_MAX_DEPTH
+            },
         };
         let node = resharp_parser::parse_ast_with(&mut b, pattern, &pflags)?;
         Self::from_node_inner(b, node, opts, pattern.len())
