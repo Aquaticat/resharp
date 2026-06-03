@@ -13,10 +13,10 @@ use resharp::{RegexOptions, UnicodeMode};
 /// every entry is a distinct compile / match code path: the unicode modes
 /// drive different class-compilation logic, `hardened` swaps in the O(N*S)
 /// forward scan, and the flag bundle exercises the `(?ismx)`-style toggles.
-/// returning fresh owned values (rather than a `&'static`) keeps the call
-/// sites simple, since `RegexOptions` is consumed by `with_options`.
-pub fn option_sweep() -> Vec<RegexOptions> {
-    vec![
+/// returns a fixed-size array (stack-allocated, no per-call heap allocation)
+/// of fresh owned values, since `RegexOptions` is consumed by `with_options`.
+pub fn option_sweep() -> [RegexOptions; 6] {
+    [
         RegexOptions::default(),
         RegexOptions::default().hardened(true),
         RegexOptions::default().unicode(UnicodeMode::Ascii),
