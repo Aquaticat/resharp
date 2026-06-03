@@ -2170,3 +2170,16 @@ fn hardened_bare_lookahead_zero_width_dot_hash() {
         .collect();
     assert_eq!(result, vec![[1, 1], [3, 3]]);
 }
+
+#[test]
+fn compile_wildcard_literal_wildcard_terminates() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let pat = ".................\x1a...............................";
+        let _ = tx.send(resharp::Regex::new(pat).is_ok());
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+        Ok(ok) => assert!(ok, "compile failed"),
+        Err(_) => panic!("Regex::new hung on wildcard-literal-wildcard pattern"),
+    }
+}

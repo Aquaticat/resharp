@@ -2873,6 +2873,14 @@ impl RegexBuilder {
             return Some(left);
         }
 
+        {
+            let (l_min, l_max) = self.get_min_max_length(left);
+            let (r_min, r_max) = self.get_min_max_length(right);
+            if l_max < r_min || r_max < l_min {
+                return Some(NodeId::BOT);
+            }
+        }
+
         if left.is_pred(self) && right.is_pred(self) {
             let l = left.pred_tset(self);
             let r = right.pred_tset(self);
