@@ -52,8 +52,11 @@ cargo +nightly fuzz run match_invariants -- \
 cargo +nightly fuzz run diff_regex -- -max_total_time=300
 ```
 
-On Linux, `cargo-fuzz` may default to the musl target, whose static libc
-conflicts with AddressSanitizer; if the build complains, force the gnu target:
+On Linux, `cargo-fuzz` defaults its build to `x86_64-unknown-linux-musl`, and
+AddressSanitizer cannot link against musl's static libc, so pass
+`--target x86_64-unknown-linux-gnu` to build the instrumented fuzzer. This is a
+cargo-fuzz + ASAN detail, not a resharp constraint: resharp itself builds for
+musl, aarch64, and wasm32 like any other target.
 
 ```sh
 cargo +nightly fuzz run compile --target x86_64-unknown-linux-gnu -- \
