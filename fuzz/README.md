@@ -16,11 +16,14 @@ root is unaffected.
 
 ## Targets
 
-- **`compile`** -- robustness of `Regex::with_options`. An arbitrary pattern is
-  compiled under a sweep of option configurations (every `UnicodeMode`,
-  `hardened`, and the inline-flag bundle). Parse / capacity / size errors are
-  expected `Err`s; only a panic, stack overflow, OOM, or ASAN report is a
-  finding. This is the primary target.
+- **`compile`** -- robustness of `Regex::with_options`. The first input byte
+  selects one option configuration from the sweep (every `UnicodeMode`,
+  `hardened`, and the inline-flag bundle); the remaining bytes are the pattern
+  (longest valid-UTF-8 prefix). One compile per unit keeps the `-timeout`
+  watchdog measuring a single `Regex::with_options` call, rather than the whole
+  six-config sweep whose ASAN cost tripped `-timeout=10` on benign sub-second
+  patterns. Parse / capacity / size errors are expected `Err`s; only a panic,
+  stack overflow, OOM, or ASAN report is a finding. This is the primary target.
 - **`match_invariants`** -- self-consistency of matching with no oracle. For any
   pattern that compiles and any haystack, asserts that matches are in-bounds and
   non-overlapping, that `find_all` non-empty iff `is_match`, and that
