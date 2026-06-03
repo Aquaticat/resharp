@@ -6,7 +6,7 @@
 #![warn(dead_code)]
 
 pub mod unicode_classes;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use solver::{Solver, TSetId};
 use std::collections::{BTreeSet, VecDeque};
 use std::fmt::Debug;
@@ -319,6 +319,10 @@ pub struct RegexBuilder {
     pub lookahead_context_max: u32,
     mk_binary_memo: FxHashMap<(TRegexId, TRegexId), TRegexId>,
     clean_cache: FxHashMap<(TSetId, TRegexId), TRegexId>,
+    /// triples (0=inter, 1=union, left, right) whose distribution rewrite is
+    /// currently on the stack. blocks the mk_inter/mk_union distribution from
+    /// re-entering the same rewrite and looping without a fixpoint.
+    rw_active: FxHashSet<(u8, NodeId, NodeId)>,
 }
 
 impl NodeId {
@@ -628,6 +632,7 @@ impl RegexBuilder {
             temp_vec: Vec::new(),
             mk_binary_memo: FxHashMap::default(),
             clean_cache: FxHashMap::default(),
+            rw_active: FxHashSet::default(),
         };
         inst.array.push(NodeKey::default());
         inst.mk_pred(TSetId::EMPTY);
@@ -2582,6 +2587,21 @@ impl RegexBuilder {
     }
 
     fn attempt_rw_union_2(&mut self, left: NodeId, right: NodeId) -> Option<NodeId> {
+        // re-entrancy guard. the union/intersection distribution rewrites are
+        // mutually recursive through mk_union/mk_inter and can ping-pong on the
+        // same (kind, left, right) operand shape without ever reaching a
+        // fixpoint, overflowing the stack (an uncatchable abort). declining the
+        // rewrite on re-entry is sound: mk_union then builds the plain `Union`
+        // node, which has identical language semantics.
+        if !self.rw_active.insert((1u8, left, right)) {
+            return None;
+        }
+        let r = self.attempt_rw_union_2_inner(left, right);
+        self.rw_active.remove(&(1u8, left, right));
+        r
+    }
+
+    fn attempt_rw_union_2_inner(&mut self, left: NodeId, right: NodeId) -> Option<NodeId> {
         use Kind::*;
 
         if cfg!(feature = "norewrite") {
@@ -2860,6 +2880,18 @@ impl RegexBuilder {
     }
 
     fn attempt_rw_inter_2(&mut self, left: NodeId, right: NodeId) -> Option<NodeId> {
+        // re-entrancy guard; see attempt_rw_union_2. declining the rewrite on
+        // re-entry is sound: mk_inter then builds the plain `Inter` node, which
+        // has identical language semantics.
+        if !self.rw_active.insert((0u8, left, right)) {
+            return None;
+        }
+        let r = self.attempt_rw_inter_2_inner(left, right);
+        self.rw_active.remove(&(0u8, left, right));
+        r
+    }
+
+    fn attempt_rw_inter_2_inner(&mut self, left: NodeId, right: NodeId) -> Option<NodeId> {
         if cfg!(feature = "norewrite") {
             return None;
         }
