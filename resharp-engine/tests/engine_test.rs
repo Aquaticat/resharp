@@ -1305,20 +1305,48 @@ fn lookahead_alternation_with_end_of_line() {
 #[test]
 #[cfg_attr(debug_assertions, ignore)]
 fn rev_bot_skip_terminates_fast() {
-    use std::time::Instant;
-    let big = vec![b'x'; 1 << 22];
+    use std::time::{Duration, Instant};
+
+    // `\z` find_all over an all-`x` haystack: assert correctness (exactly one
+    // zero-width match at end-of-input) and that the reverse BOT-skip stays
+    // LINEAR in input size. an absolute wall-clock budget is not portable: the
+    // skip's speedup is host- and build-dependent (on some builds `\z` costs a
+    // full linear DFA pass and still takes several ms on 4 MiB), so a fixed
+    // sub-millisecond bound fails on hardware where the scan is merely linear,
+    // not regressed. check the SCALING instead: a 4x larger input costs ~4x
+    // when linear and ~16x under a quadratic regression, so an 8x ceiling
+    // separates the two with 2x headroom on each side.
+    fn best_of_3(re: &Regex, hay: &[u8]) -> Duration {
+        let mut best = Duration::MAX;
+        for _ in 0..3 {
+            let t = Instant::now();
+            let ms = re.find_all(hay).unwrap();
+            let el = t.elapsed();
+            assert_eq!(ms.len(), 1);
+            assert_eq!(ms[0].start, hay.len());
+            assert_eq!(ms[0].end, hay.len());
+            best = best.min(el);
+        }
+        best
+    }
 
     let re = Regex::new(r"\z").unwrap();
-    let t = Instant::now();
-    let ms = re.find_all(&big).unwrap();
-    let elapsed = t.elapsed();
-    assert_eq!(ms.len(), 1);
-    assert_eq!(ms[0].start, big.len());
-    assert_eq!(ms[0].end, big.len());
+    let small = vec![b'x'; 1 << 20]; // 1 MiB
+    let big = vec![b'x'; 1 << 22]; // 4 MiB
+
+    let t_small = best_of_3(&re, &small);
+    // when the skip is fully effective the 1 MiB scan is timer-noise-dominated
+    // (sub-100us); the ratio is then meaningless, so accept and return.
+    if t_small < Duration::from_micros(100) {
+        return;
+    }
+    let t_big = best_of_3(&re, &big);
+
+    let factor = t_big.as_secs_f64() / t_small.as_secs_f64();
     assert!(
-        elapsed.as_micros() < 500,
-        "`\\z` on 4MB took {:?}, expected sub-ms (BOT skip regressed?)",
-        elapsed
+        factor < 8.0,
+        "`\\z` scaling 1MiB->4MiB was {factor:.1}x (small={t_small:?}, big={t_big:?}); \
+         linear is ~4x, a quadratic BOT-skip regression would be ~16x",
     );
 }
 
