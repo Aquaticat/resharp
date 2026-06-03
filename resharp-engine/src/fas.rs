@@ -531,10 +531,24 @@ impl LDFA {
             }
         } else {
             for &i in nulls.iter().rev() {
-                if i < skip_until || max[i] == 0 {
+                if i < skip_until {
                     continue;
                 }
-                emit(i, max[i], &mut skip_until);
+                // boundary positions in `nulls` are confirmed matches by the
+                // reverse scan: a null at pos 0 or at end-of-input is a
+                // (possibly zero-width) match. interior candidates still need
+                // the forward scan to confirm (`max[i] != 0`). without these
+                // two exceptions the `max[i] == 0` "no match" sentinel hides a
+                // zero-width match at position 0 (whose end is also 0), and the
+                // scan loop (`pos < data_end`) never spawns one at data_end, so
+                // both boundary zero-width matches were dropped. `max[i].max(i)`
+                // mirrors the ALWAYS_NULLABLE branch: it yields end == i for a
+                // zero-width match and is a no-op for a confirmed longer match
+                // (whose end is always >= i).
+                if i != 0 && i != data_end && max[i] == 0 {
+                    continue;
+                }
+                emit(i, max[i].max(i), &mut skip_until);
             }
         }
         fas.max = max;
