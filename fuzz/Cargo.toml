@@ -1,0 +1,53 @@
+[package]
+name = "resharp-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "MIT"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }
+arbitrary = { version = "1", features = ["derive"] }
+resharp = { path = "../resharp-engine" }
+# differential oracle for `diff_regex`; resharp already uses the regex crate as
+# a dev-dependency for its own comparison tests / benches.
+regex = "1"
+
+[lib]
+name = "resharp_fuzz"
+path = "src/lib.rs"
+
+[[bin]]
+name = "compile"
+path = "fuzz_targets/compile.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "match_invariants"
+path = "fuzz_targets/match_invariants.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "diff_regex"
+path = "fuzz_targets/diff_regex.rs"
+test = false
+doc = false
+bench = false
+
+# Own workspace so `cargo build` at the repo root (stable toolchain) never tries
+# to compile the libfuzzer-sys / sanitizer-coverage machinery, which only links
+# under cargo-fuzz's injected nightly RUSTFLAGS. The parent workspace lists its
+# members explicitly and does not include `fuzz`, so this also stops cargo from
+# treating the fuzz crate as an orphan member.
+[workspace]
+
+[profile.release]
+# keep line tables so libFuzzer / ASAN crash traces point at resharp source.
+debug = 1

@@ -1,0 +1,10 @@
+# cargo-fuzz build output
+/target
+# crash / timeout / oom reproducers (never committed; they are raw fuzzer input)
+/artifacts
+# `cargo fuzz coverage` output
+/coverage
+# libFuzzer corpus growth: ignore everything under corpus/ except the curated
+# seed-* files committed for the compile target.
+/corpus/*/*
+!/corpus/*/seed-*
