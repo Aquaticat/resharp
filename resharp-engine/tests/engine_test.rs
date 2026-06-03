@@ -1351,6 +1351,49 @@ fn rev_bot_skip_terminates_fast() {
 }
 
 #[test]
+fn max_depth_rejects_deep_nesting() {
+    // DEFAULT_MAX_DEPTH is 1000. nesting at the cap compiles; one past it is
+    // rejected with a clean Err instead of a stack-overflow abort. groups,
+    // complements, and lookarounds all count toward the open-group depth, so
+    // the check fires for every nesting kind (plain groups collapse to a
+    // shallow node, but the parse-time depth check still rejects them).
+    //
+    // run on a large-stack thread: the accepted boundary case builds a
+    // ~1000-deep AST, and the default cargo-test thread stack (~2 MiB) is too
+    // small for the deep walks in a debug build (the abort this fix prevents
+    // for >1000 still applies to the deepest *allowed* pattern in debug). a
+    // generous stack keeps the at-cap accept deterministic in both profiles;
+    // the rejected cases never build the deep AST so they are stack-cheap.
+    let handle = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| {
+            let at_cap = format!("{}a{}", "(".repeat(999), ")".repeat(999));
+            assert!(Regex::new(&at_cap).is_ok(), "depth 999 should compile");
+
+            let too_deep = format!("{}a{}", "(".repeat(1001), ")".repeat(1001));
+            assert!(
+                Regex::new(&too_deep).is_err(),
+                "depth 1001 should be rejected by max_depth"
+            );
+
+            let compl_too_deep = format!("{}a{}", "~(".repeat(1001), ")".repeat(1001));
+            assert!(
+                Regex::new(&compl_too_deep).is_err(),
+                "complement depth 1001 should be rejected by max_depth"
+            );
+
+            // unbounded_size disables the depth limit (the existing escape hatch).
+            let opts = RegexOptions::default().unbounded_size(true);
+            assert!(
+                Regex::with_options(&too_deep, opts).is_ok(),
+                "unbounded_size should disable the depth limit"
+            );
+        })
+        .unwrap();
+    handle.join().unwrap();
+}
+
+#[test]
 fn alternation_prefix_soundness_bulk() {
     use resharp::UnicodeMode;
     let mk = |p: &str| {
