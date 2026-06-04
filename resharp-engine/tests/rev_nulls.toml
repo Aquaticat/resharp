@@ -134,3 +134,20 @@ name = "dotstar_inner_literal_multiline"
 pattern = '.*=.*'
 input = "first\nsecond=line\nthird"
 rev_nulls = [12, 11, 10, 9, 8, 7, 6]
+
+# Regression: a zero-width negative lookahead of a begin anchor lowers to
+# `EPS & ~\A`, whose null-effect set keeps a nullable entry from each operand at
+# the same interior position. collect_nulls must register each position once;
+# before the fix it pushed interior positions twice (got [2, 2, 1, 1] here, which
+# made find_all emit the zero-width span (2, 2) twice).
+[[test]]
+name = "neg_lookahead_begin_anchor_no_duplicate_nulls"
+pattern = '(?!\A)'
+input = "abc"
+rev_nulls = [2, 1]
+
+[[test]]
+name = "neg_lookahead_begin_anchor_no_duplicate_nulls_run"
+pattern = '(?!\A)'
+input = "aaaa"
+rev_nulls = [3, 2, 1]
