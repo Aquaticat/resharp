@@ -1,0 +1,75 @@
+# libFuzzer dictionary for resharp patterns.
+# tokens steer mutation toward resharp's syntax (standard regex plus the
+# intersection / complement / wildcard extensions and lookarounds).
+
+# resharp-only operators
+"&"
+"~("
+"_"
+"_*"
+"|"
+
+# lookarounds
+"(?="
+"(?!"
+"(?<="
+"(?<!"
+
+# groups and inline flags
+"(?:"
+"(?i)"
+"(?-i)"
+"(?m)"
+"(?-m)"
+"(?s)"
+"(?x)"
+"(?U)"
+
+# anchors
+"^"
+"$"
+"\\A"
+"\\z"
+"\\b"
+"\\B"
+
+# perl classes
+"\\d"
+"\\D"
+"\\w"
+"\\W"
+"\\s"
+"\\S"
+
+# character classes
+"."
+"[a-z]"
+"[A-Z]"
+"[0-9]"
+"[^a-z]"
+"[[:alpha:]]"
+
+# quantifiers
+"*"
+"+"
+"?"
+"{0,4}"
+"{2,}"
+"{3}"
+"{8,}"
+
+# escapes and unicode
+"\\."
+"\\\\"
+"\\n"
+"\\t"
+"\\x41"
+"\\u{1F600}"
+"\\p{L}"
+"\\p{Nd}"
+"\\P{L}"
+
+# small literals
+"a"
+"abc"
+"Hunter2024"
