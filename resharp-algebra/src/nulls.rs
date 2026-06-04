@@ -232,14 +232,20 @@ impl NullsBuilder {
         if set1 == set2 {
             return set1;
         }
-        if set1 == NullsId::ALWAYS0 && set2 == NullsId::END0 {
-            return NullsId::END0;
+        let s1 = self.get_set_ref(set1).clone();
+        let s2 = self.get_set_ref(set2).clone();
+        let mut result: BTreeSet<NullState> = BTreeSet::new();
+        for ns1 in &s1 {
+            for ns2 in &s2 {
+                if ns1.rel == ns2.rel {
+                    let mask = ns1.mask.and(ns2.mask);
+                    if mask != Nullability::NEVER {
+                        result.insert(NullState::new(mask, ns1.rel));
+                    }
+                }
+            }
         }
-        if set1 == NullsId::END0 && set2 == NullsId::ALWAYS0 {
-            return NullsId::END0;
-        }
-
-        let result = self.get_id(self.get_set_ref(set1) | self.get_set_ref(set2));
+        let result = self.get_id(result);
         self.created.insert(key, result);
         result
     }

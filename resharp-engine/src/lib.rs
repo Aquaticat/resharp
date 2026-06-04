@@ -878,7 +878,8 @@ fn ensure_begin_leading(
             ensure_begin_leading(b, node.left(b), at_start)?;
             ensure_begin_leading(b, node.right(b), at_start)
         }
-        Kind::Star | Kind::Counted | Kind::Compl => ensure_begin_leading(b, node.left(b), false),
+        Kind::Star | Kind::Counted => ensure_begin_leading(b, node.left(b), false),
+        Kind::Compl => Ok(()),
         Kind::Lookbehind | Kind::Lookahead => Ok(()),
     }
 }

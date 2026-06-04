@@ -3,6 +3,11 @@ expected internal representation
 '''
 
 [[test]]
+name = 'not-begins?'
+pattern = '(?!\A)(?=[A-Z])'
+pp = '(&~(\A))(?=[A-Z]_*)'
+
+[[test]]
 name = 'lookahead_lift_anchor'
 pattern = '(?=^keychain:\s)'
 pp = '(?<=_*(\A|\n))(?=keychain:[\t-\r ]_*)'

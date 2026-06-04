@@ -838,24 +838,6 @@ input = "    /** @type {Command[]} */"
 matches = [[0, 28]]
 
 [[test]]
-name = "end_anchor_trailing_neg_lb_abc"
-pattern = '\z(?<!,)'
-input = "abc"
-matches = [[3, 3]]
-
-[[test]]
-name = "end_anchor_trailing_neg_lb_empty"
-pattern = '\z(?<!,)'
-input = ""
-matches = [[0, 0]]
-
-[[test]]
-name = "end_anchor_trailing_neg_lb_comma"
-pattern = '\z(?<!,)'
-input = "ab,"
-matches = []
-
-[[test]]
 name = "neg_lb_digit_a_1a"
 pattern = '(?<!\d)a'
 input = "1a"

@@ -1,13 +1,4 @@
 
-# [[test]]
-# name = "lb_union_literal_rev_start"
-# pattern = '(?<!\d)\d+|-\d+'
-# input = "-7"
-# rev = [
-#   "(\\-|(?=(\\z|[^0-9])_*)|_*[0-9](\\-|(?=(\\z|[^0-9])_*)))",
-#   "(|_*[0-9](\\-|(?=(\\z|[^0-9])_*))|(?=){1})",
-# ]
-
 [[test]]
 name = "word_boundary_x_rev"
 pattern = '\bx\b'
@@ -50,3 +41,4 @@ name = "multichar_neg_lb_ab_x_rev"
 pattern = "(?<!ab)x"
 input = "xabx"
 rev = ["?", "?", "?", "?"]
+

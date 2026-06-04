@@ -1145,10 +1145,10 @@ impl RegexBuilder {
             Kind::Star | Kind::Lookbehind | Kind::Lookahead => 0,
             Kind::Counted => self.get_min_length_only(node_id.left(self)),
             Kind::Compl => {
-                if self.nullability(node_id.left(self)) == Nullability::NEVER {
-                    0
-                } else {
+                if self.nullability(node_id.left(self)) == Nullability::ALWAYS {
                     1
+                } else {
+                    0
                 }
             }
         }
@@ -1604,12 +1604,8 @@ impl RegexBuilder {
                 let m2 = self.get_node_meta_id(inst.right);
                 let meta_id = {
                     let left_nulls = self.mb.get_meta_ref(m1).nulls;
-                    let mask_l = inst.left.nullability(self);
-                    let mask_r = inst.right.nullability(self);
                     let right_nulls = self.mb.get_meta_ref(m2).nulls;
-                    let mut nulls = self.mb.nb.and_id(left_nulls, right_nulls);
-                    nulls = self.mb.nb.and_mask(nulls, mask_l);
-                    nulls = self.mb.nb.and_mask(nulls, mask_r);
+                    let nulls = self.mb.nb.and_id(left_nulls, right_nulls);
                     let new_meta = Metadata {
                         flags: self.mb.flags_inter(m1, m2),
                         nulls,
@@ -2273,18 +2269,43 @@ impl RegexBuilder {
                 let new_left = self.reverse(node_id.right(self))?;
                 if new_right.is_union(self) {
                     let union = new_right;
-                    if new_left != NodeId::TS
-                        && (union.left(self).contains_lookbehind(self)
-                            || union.right(self).contains_lookbehind(self))
+                    if union.left(self).contains_lookbehind(self)
+                        || union.right(self).contains_lookbehind(self)
                     {
-                        #[cfg(feature = "debug")]
-                        {
-                            eprintln!("left: {:?}, right: {:?}", self.pp(new_left), self.pp(union));
+                        if new_left.is_ts() {
+                            self.mk_concat(new_left, new_right)
+                        } else {
+                            #[cfg(feature = "debug")]
+                            {
+                                eprintln!(
+                                    "left: {:?}, right: {:?}",
+                                    self.pp(new_left),
+                                    self.pp(union)
+                                );
+                            }
+                            return Err(ResharpError::UnsupportedPattern);
                         }
-                        return Err(ResharpError::UnsupportedPattern);
+                    } else {
+                        self.mk_concat(new_left, new_right)
                     }
+                } else if node_id.right(self).is_union(self) {
+                    // R . ((?<=x)|y) :  a headache for correctness
+                    // TODO: inspect in the future how and when we can support this
+                    let union = node_id.right(self);
+                    if union.left(self).contains_lookbehind(self)
+                        || union.right(self).contains_lookbehind(self)
+                    {
+                        if new_left.is_ts() {
+                            self.mk_concat(new_left, new_right)
+                        } else {
+                            return Err(ResharpError::UnsupportedPattern);
+                        }
+                    } else {
+                        self.mk_concat(new_left, new_right)
+                    }
+                } else {
+                    self.mk_concat(new_left, new_right)
                 }
-                self.mk_concat(new_left, new_right)
             }
             Kind::Union => {
                 let left = self.reverse(node_id.left(self))?;
@@ -3531,6 +3552,11 @@ impl RegexBuilder {
     }
 
     pub fn mk_neg_lookahead(&mut self, body: NodeId, rel: u32) -> NodeId {
+        let (_, p_max) = self.get_min_max_length(body);
+        if p_max == 0 {
+            let not_body = self.mk_compl(body);
+            return self.mk_inter(NodeId::EPS, not_body);
+        }
         let neg_inner = self.mk_concat(body, NodeId::TS);
         let neg_part = self.mk_compl(neg_inner);
         let conc = self.mk_concat(neg_part, NodeId::END);

@@ -633,3 +633,16 @@ name = "trim_optional_core"
 pattern = '\A(([ \t\r\n]*)(\s*))(?:(?=\S)[\s\S]*\S)?((\s*)([ \t\r\n]*))\z'
 input = " *"
 matches = [[0, 2]]
+
+[[test]]
+name = "lb_anchored"
+pattern = '\A((?<=a)B+|x)'
+input = "aB"
+matches = []
+
+[[test]]
+name = "la_anchored"
+pattern = '(?!\A)(?=[A-Z])'
+input = "aB"
+matches = [[1, 1]]
+

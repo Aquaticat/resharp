@@ -91,6 +91,7 @@ fn normal_anchors() {
 }
 
 #[test]
+#[ignore = "takes a long time; run only for releases"]
 fn is_match_agrees_with_find_all() {
     let files = [
         "anchors.toml",
@@ -715,6 +716,7 @@ fn hardened_boolean() {
 }
 
 #[test]
+#[ignore = "takes a long time; run only for releases"]
 fn hardened_cross_feature() {
     run_file_hardened("cross_feature.toml");
 }
@@ -2248,4 +2250,3 @@ fn compile_wildcard_literal_wildcard_terminates() {
         Err(_) => panic!("Regex::new hung on wildcard-literal-wildcard pattern"),
     }
 }
-

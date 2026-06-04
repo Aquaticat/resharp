@@ -124,8 +124,6 @@ pub struct FwdDFA {
     pub action_map: FxHashMap<FwdAction, u32>,
     pub stride: usize,
     pub initial_asid: u32,
-    /// true if always nullable
-    pub always_nullable: bool,
     pub keep_spawn_on_merge: bool,
     max: Vec<usize>,
     linker: Vec<u32>,
@@ -144,7 +142,6 @@ impl FwdDFA {
             action_map: FxHashMap::default(),
             stride,
             initial_asid: 0,
-            always_nullable: ldfa.effects_id[DFA_INITIAL as usize] as u32 == EID_ALWAYS0,
             keep_spawn_on_merge,
             max: Vec::new(),
             linker: Vec::new(),
@@ -283,7 +280,6 @@ fn fas_apply(
     linker: &mut [u32],
     max: &mut [usize],
     pos: usize,
-    init_contributes_pos: bool,
     keep_spawn_on_merge: bool,
     spawn_allowed: bool,
 ) {
@@ -309,36 +305,28 @@ fn fas_apply(
     if spawn_allowed {
         match act.spawn {
             FAS_SPAWN_NONE => {}
-            FAS_SPAWN_DEAD => {
-                if init_contributes_pos && max[pos] < pos {
-                    max[pos] = pos;
-                }
-            }
+            FAS_SPAWN_DEAD => {}
             s_code if (s_code & FAS_LOW_BIT) != 0 => {
                 if keep_spawn_on_merge {
                     let idx = (s_code & 0x7FFF) as usize;
                     let rel = act.new_end_rel[idx];
-                    let init_me = if init_contributes_pos { pos } else { 0 };
                     let candidate_end = if rel != FAS_NOT_NULLABLE {
                         next_pos.checked_sub(rel as usize).unwrap_or(0)
                     } else {
                         0
                     };
-                    let me = candidate_end.max(init_me);
-                    new_regs[idx].push_spawn(linker, pos as u32, me);
+                    new_regs[idx].push_spawn(linker, pos as u32, candidate_end);
                 }
             }
             idx_u16 => {
                 let idx = idx_u16 as usize;
                 let rel = act.new_end_rel[idx];
-                let init_me = if init_contributes_pos { pos } else { 0 };
                 let candidate_end = if rel != FAS_NOT_NULLABLE {
                     next_pos.checked_sub(rel as usize).unwrap_or(0)
                 } else {
                     0
                 };
-                let me = candidate_end.max(init_me);
-                new_regs[idx].push_spawn(linker, pos as u32, me);
+                new_regs[idx].push_spawn(linker, pos as u32, candidate_end);
             }
         }
     }
@@ -362,9 +350,14 @@ impl LDFA {
         let mut linker = std::mem::take(&mut fas.linker);
         let mut regs = std::mem::take(&mut fas.regs);
         let mut new_regs = std::mem::take(&mut fas.new_regs);
-        // max[i] = best end position seen for any spawn at pos i; 0 = no match.
+        // max[i] = best end position seen for any spawn at pos i.
         max.clear();
-        max.resize(data_end + 1, 0);
+        if ALWAYS_NULLABLE {
+            // ALWAYS_NULLABLE: pre-fill with i so max[i] >= i holds
+            max.extend(0..=data_end);
+        } else {
+            max.resize(data_end + 1, 0);
+        }
         // linker[i] = next spawn-pos in the same slot's list, or SLOT_NIL.
         linker.clear();
         linker.resize(data_end + 1, SLOT_NIL);
@@ -450,7 +443,6 @@ impl LDFA {
                 &mut linker,
                 &mut max,
                 pos,
-                fas.always_nullable,
                 fas.keep_spawn_on_merge,
                 spawn_allowed,
             );
@@ -482,9 +474,8 @@ impl LDFA {
                     &mut linker,
                     &mut max,
                     pos,
-                    fas.always_nullable,
                     fas.keep_spawn_on_merge,
-                    false, // spawn_allowed: ni == 0
+                    false,
                 );
                 std::mem::swap(&mut regs, &mut new_regs);
                 asid = act.next_asid;
@@ -517,6 +508,12 @@ impl LDFA {
         for entries in regs.iter_mut() {
             entries.drain_to_max(&linker, &mut max);
         }
+        if !ALWAYS_NULLABLE
+            && nulls.first().copied() == Some(data_end)
+            && max[data_end] < data_end
+        {
+            max[data_end] = data_end;
+        }
         let mut skip_until = 0usize;
         let mut emit = |i: usize, e: usize, skip_until: &mut usize| {
             matches.push(Match { start: i, end: e });
@@ -527,16 +524,14 @@ impl LDFA {
                 if i < skip_until {
                     continue;
                 }
-                // TODO: this .max(i) is hiding a bug, need to find the real culprit
-                emit(i, max[i].max(i), &mut skip_until);
+                emit(i, max[i], &mut skip_until);
             }
         } else {
             for &i in nulls.iter().rev() {
-                if i < skip_until || (i != 0 && i != data_end && max[i] == 0) {
+                if i < skip_until || (i != 0 && max[i] == 0) {
                     continue;
                 }
-                // TODO: this .max(i) is hiding a bug, need to find the real culprit
-                emit(i, max[i].max(i), &mut skip_until);
+                emit(i, max[i], &mut skip_until);
             }
         }
         fas.max = max;
