@@ -938,6 +938,11 @@ impl Regex {
             } else {
                 resharp_parser::DEFAULT_MAX_REPEAT
             },
+            max_depth: if opts.unbounded_size {
+                usize::MAX
+            } else {
+                resharp_parser::DEFAULT_MAX_DEPTH
+            },
         };
         let node = resharp_parser::parse_ast_with(&mut b, pattern, &pflags)?;
         Self::from_node_inner(b, node, opts, pattern.len())
@@ -1039,6 +1044,9 @@ impl Regex {
         let mut rev_ts = engine::LDFA::new_rev(&mut b, ts_rev_start, max_cap)?;
         rev_ts.prefix_skip = rev_skip;
         rev_ts.ensure_pruned_skip();
+        if b.is_begin_anchored(ts_rev_start) {
+            rev_ts.ensure_dead_skip();
+        }
 
         let stream_init = {
             let fwd_pruned = b.prune_begin_eps(ts_fwd_start);

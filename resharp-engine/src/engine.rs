@@ -636,6 +636,12 @@ impl LDFA {
         Some(self.get_or_create_skip_range(ranges))
     }
 
+    pub(crate) fn ensure_dead_skip(&mut self) {
+        if self.skip_ids.len() > DFA_DEAD as usize && self.skip_ids[DFA_DEAD as usize] == 0 {
+            self.skip_ids[DFA_DEAD as usize] = self.get_or_create_skip_all();
+        }
+    }
+
     pub(crate) fn ensure_pruned_skip(&mut self) {
         if self.prefix_skip.is_some() {
             let p = self.pruned as usize;
@@ -1704,7 +1710,7 @@ fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool, const INITIAL_SKIP: boo
     let minterms_lookup = t.minterms_lookup;
     let mt_log = t.mt_log;
     while pos > 1 {
-        if false && SKIP {
+        if SKIP {
             let sid = skip_ids[curr as usize];
             if sid != 0 {
                 if INITIAL_SKIP && curr == pruned_id {

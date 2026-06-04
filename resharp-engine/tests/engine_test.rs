@@ -1,6 +1,6 @@
 mod common;
 use common::schemas::{EngineCase, EngineFile, InternalFile};
-use resharp::{Error, Regex, RegexOptions};
+use resharp::{Error, Match, Regex, RegexOptions};
 use std::path::Path;
 
 fn load_tests(filename: &str) -> Vec<EngineCase> {
@@ -1303,23 +1303,59 @@ fn lookahead_alternation_with_end_of_line() {
 }
 
 #[test]
-#[cfg_attr(debug_assertions, ignore)]
-fn rev_bot_skip_terminates_fast() {
-    use std::time::Instant;
-    let big = vec![b'x'; 1 << 22];
-
+fn rev_bot_constant_time() {
+    use std::time::{Duration, Instant};
+    fn timed(re: &Regex, hay: &[u8]) -> Duration {
+        let ms = re.find_all(hay).unwrap();
+        assert_eq!(ms.len(), 1);
+        assert_eq!(ms[0].start, hay.len());
+        assert_eq!(ms[0].end, hay.len());
+        let t = Instant::now();
+        re.find_all(hay).unwrap();
+        t.elapsed()
+    }
     let re = Regex::new(r"\z").unwrap();
-    let t = Instant::now();
-    let ms = re.find_all(&big).unwrap();
-    let elapsed = t.elapsed();
-    assert_eq!(ms.len(), 1);
-    assert_eq!(ms[0].start, big.len());
-    assert_eq!(ms[0].end, big.len());
+    let small = vec![b'x'; 1 << 16];
+    let big = vec![b'x'; 1 << 22];
+    let _ = timed(&re, &small);
+    let t_small = timed(&re, &small);
+    let t_big = timed(&re, &big);
+    let factor = t_big.as_secs_f64() / t_small.as_secs_f64();
+    println!("factor: {:?}", factor);
     assert!(
-        elapsed.as_micros() < 500,
-        "`\\z` on 4MB took {:?}, expected sub-ms (BOT skip regressed?)",
-        elapsed
+        factor < 2.,
+        "`\\z` scaling was {factor:.1}x (small={t_small:?}, big={t_big:?})",
     );
+}
+
+#[test]
+fn max_depth_rejects_deep_nesting() {
+    let handle = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| {
+            let at_cap = format!("{}a{}", "(".repeat(999), ")".repeat(999));
+            assert!(Regex::new(&at_cap).is_ok(), "depth 999 should compile");
+
+            let too_deep = format!("{}a{}", "(".repeat(1001), ")".repeat(1001));
+            assert!(
+                Regex::new(&too_deep).is_err(),
+                "depth 1001 should be rejected by max_depth"
+            );
+
+            let compl_too_deep = format!("{}a{}", "~(".repeat(1001), ")".repeat(1001));
+            assert!(
+                Regex::new(&compl_too_deep).is_err(),
+                "complement depth 1001 should be rejected by max_depth"
+            );
+
+            let opts = RegexOptions::default().unbounded_size(true);
+            assert!(
+                Regex::with_options(&too_deep, opts).is_ok(),
+                "unbounded_size should disable the depth limit"
+            );
+        })
+        .unwrap();
+    handle.join().unwrap();
 }
 
 #[test]
@@ -2159,6 +2195,25 @@ fn lookahead_in_optional_with_surrounding_stars() {
 }
 
 #[test]
+fn hardened_word_boundary_non_utf8_findall() {
+    let re = Regex::with_options(r"\B|,", RegexOptions::default().hardened(true)).unwrap();
+    let hay: &[u8] = &[0xAB];
+    assert!(re.is_match(hay).unwrap());
+    assert_eq!(
+        re.find_anchored(hay).unwrap(),
+        Some(Match { start: 0, end: 0 })
+    );
+    assert_eq!(
+        re.find_all(hay).unwrap(),
+        vec![Match { start: 0, end: 0 }, Match { start: 1, end: 1 }],
+    );
+    assert_eq!(
+        Regex::new(r"\B|,").unwrap().find_all(hay).unwrap(),
+        vec![Match { start: 0, end: 0 }, Match { start: 1, end: 1 }],
+    );
+}
+
+#[test]
 fn hardened_bare_lookahead_zero_width_dot_hash() {
     let opts = RegexOptions::default().hardened(true);
     let re = Regex::with_options("(?=[.#])", opts).unwrap();
@@ -2169,6 +2224,16 @@ fn hardened_bare_lookahead_zero_width_dot_hash() {
         .map(|m| [m.start, m.end])
         .collect();
     assert_eq!(result, vec![[1, 1], [3, 3]]);
+}
+
+#[test]
+fn inter_zero_min_len_union_anchor_no_overflow() {
+    assert!(Regex::new(r"a*&(b|^)").is_ok());
+}
+
+#[test]
+fn inter_nested_anchored_alternation_no_overflow() {
+    assert!(Regex::new(r"(?iu)(?:@2222&(?:(?:(?:(?:(?:i22|222)|(?:222|^))|caf\u{e9})|caf\u{e9})|caf\u{e9}))").is_ok());
 }
 
 #[test]
@@ -2183,3 +2248,4 @@ fn compile_wildcard_literal_wildcard_terminates() {
         Err(_) => panic!("Regex::new hung on wildcard-literal-wildcard pattern"),
     }
 }
+

@@ -527,14 +527,16 @@ impl LDFA {
                 if i < skip_until {
                     continue;
                 }
+                // TODO: this .max(i) is hiding a bug, need to find the real culprit
                 emit(i, max[i].max(i), &mut skip_until);
             }
         } else {
             for &i in nulls.iter().rev() {
-                if i < skip_until || max[i] == 0 {
+                if i < skip_until || (i != 0 && i != data_end && max[i] == 0) {
                     continue;
                 }
-                emit(i, max[i], &mut skip_until);
+                // TODO: this .max(i) is hiding a bug, need to find the real culprit
+                emit(i, max[i].max(i), &mut skip_until);
             }
         }
         fas.max = max;

@@ -48,6 +48,7 @@ pub struct PatternFlags {
     pub max_list_len: usize,
     /// max upper bound on bounded repetition `{n,m}`. default 500.
     pub max_repeat: u32,
+    pub max_depth: usize,
 }
 
 // arbitrary safeguards, these will not prevent intentional DoS patterns
@@ -55,6 +56,7 @@ pub struct PatternFlags {
 pub const DEFAULT_MAX_REPEAT: u32 = 500;
 pub const DEFAULT_EXPANDED_AST_LIMIT: u64 = 50_000;
 pub const DEFAULT_MAX_LIST_LEN: usize = 4_000;
+pub const DEFAULT_MAX_DEPTH: usize = 1_000;
 
 impl Default for PatternFlags {
     fn default() -> Self {
@@ -69,6 +71,7 @@ impl Default for PatternFlags {
             expanded_ast_limit: DEFAULT_EXPANDED_AST_LIMIT,
             max_list_len: DEFAULT_MAX_LIST_LEN,
             max_repeat: DEFAULT_MAX_REPEAT,
+            max_depth: DEFAULT_MAX_DEPTH,
         }
     }
 }
@@ -383,6 +386,7 @@ pub struct ResharpParser<'s> {
     expanded_ast_limit: u64,
     max_list_len: usize,
     max_repeat: u32,
+    max_depth: usize,
     comments: RefCell<Vec<ast::Comment>>,
     stack_group: RefCell<Vec<GroupState>>,
     stack_class: RefCell<Vec<ClassState>>,
@@ -589,6 +593,7 @@ impl<'s> ResharpParser<'s> {
             expanded_ast_limit: flags.expanded_ast_limit,
             max_list_len: flags.max_list_len,
             max_repeat: flags.max_repeat,
+            max_depth: flags.max_depth,
             comments: RefCell::new(vec![]),
             stack_group: RefCell::new(vec![]),
             stack_class: RefCell::new(vec![]),
@@ -2224,6 +2229,9 @@ impl<'s> ResharpParser<'s> {
                     concat = self.parse_counted_repetition(concat)?;
                 }
                 _ => concat.asts.push(self.parse_primitive()?.into_ast()),
+            }
+            if self.stack_group.borrow().len() > self.max_depth {
+                return Err(self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex));
             }
         }
         let ast = self.pop_group_end(concat)?;

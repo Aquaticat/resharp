@@ -20,7 +20,9 @@ rustc-hash = "2"
 serde = { version = "1", features = ["derive"], optional = true }
 
 [features]
+default = ["reentrant-assert"]
 graphviz = []
 norewrite = []
 debug = []
+reentrant-assert = []
 serialize = ["dep:serde"]

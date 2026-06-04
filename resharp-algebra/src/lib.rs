@@ -7,6 +7,8 @@
 
 pub mod unicode_classes;
 use rustc_hash::FxHashMap;
+#[cfg(feature = "reentrant-assert")]
+use rustc_hash::FxHashSet;
 use solver::{Solver, TSetId};
 use std::collections::{BTreeSet, VecDeque};
 use std::fmt::Debug;
@@ -319,6 +321,8 @@ pub struct RegexBuilder {
     pub lookahead_context_max: u32,
     mk_binary_memo: FxHashMap<(TRegexId, TRegexId), TRegexId>,
     clean_cache: FxHashMap<(TSetId, TRegexId), TRegexId>,
+    #[cfg(feature = "reentrant-assert")]
+    rw_active: FxHashSet<(Kind, NodeId, NodeId)>,
 }
 
 impl NodeId {
@@ -628,6 +632,8 @@ impl RegexBuilder {
             temp_vec: Vec::new(),
             mk_binary_memo: FxHashMap::default(),
             clean_cache: FxHashMap::default(),
+            #[cfg(feature = "reentrant-assert")]
+            rw_active: FxHashSet::default(),
         };
         inst.array.push(NodeKey::default());
         inst.mk_pred(TSetId::EMPTY);
@@ -1077,7 +1083,8 @@ impl RegexBuilder {
                 }
             }
             Kind::Counted => self.get_min_max_length(node_id.left(self)),
-            Kind::Star | Kind::Lookbehind | Kind::Compl => (0, u32::MAX),
+            Kind::Star | Kind::Compl => (0, u32::MAX),
+            Kind::Lookbehind => (0, 0),
         }
     }
 
@@ -2582,6 +2589,24 @@ impl RegexBuilder {
     }
 
     fn attempt_rw_union_2(&mut self, left: NodeId, right: NodeId) -> Option<NodeId> {
+        #[cfg(feature = "reentrant-assert")]
+        if !self.rw_active.insert((Kind::Union, left, right)) {
+            #[cfg(debug_assertions)]
+            panic!(
+                "reentrant union rewrite {:?} | {:?}, this is a bug, please file an issue with the pattern",
+                self.pp(left),
+                self.pp(right)
+            );
+            #[cfg(not(debug_assertions))]
+            return None;
+        }
+        let r = self.attempt_rw_union_2_inner(left, right);
+        #[cfg(feature = "reentrant-assert")]
+        self.rw_active.remove(&(Kind::Union, left, right));
+        r
+    }
+
+    fn attempt_rw_union_2_inner(&mut self, left: NodeId, right: NodeId) -> Option<NodeId> {
         use Kind::*;
 
         if cfg!(feature = "norewrite") {
@@ -2598,42 +2623,42 @@ impl RegexBuilder {
             return Some(right);
         }
 
-        if left.is_inter(self) && right.is_inter(self) {
-            // TODO: not terminating
-            let mut lconj: Vec<NodeId> = Vec::new();
-            left.any_inter_component(self, |v| {
-                lconj.push(v);
-                false
-            });
-            let lconj_initial = lconj.len();
-            let mut common = NodeId::TS;
-            let mut r_rest = NodeId::TS;
-            let mut cur = right;
-            loop {
-                let (v, next) = if cur.kind(self) == Inter {
-                    (cur.left(self), Some(cur.right(self)))
-                } else {
-                    (cur, None)
-                };
-                if let Some(pos) = lconj.iter().position(|&x| x == v) {
-                    lconj.swap_remove(pos);
-                    common = self.mk_inter(v, common);
-                } else {
-                    r_rest = self.mk_inter(v, r_rest);
-                }
-                match next {
-                    Some(n) => cur = n,
-                    None => break,
-                }
-            }
-            if lconj.len() < lconj_initial {
-                let l_rest = lconj
-                    .iter()
-                    .fold(NodeId::TS, |acc, &v| self.mk_inter(v, acc));
-                let inner_union = self.mk_union(l_rest, r_rest);
-                return Some(self.mk_inter(common, inner_union));
-            }
-        }
+        // if left.is_inter(self) && right.is_inter(self) {
+        //     // TODO: not terminating
+        //     let mut lconj: Vec<NodeId> = Vec::new();
+        //     left.any_inter_component(self, |v| {
+        //         lconj.push(v);
+        //         false
+        //     });
+        //     let lconj_initial = lconj.len();
+        //     let mut common = NodeId::TS;
+        //     let mut r_rest = NodeId::TS;
+        //     let mut cur = right;
+        //     loop {
+        //         let (v, next) = if cur.kind(self) == Inter {
+        //             (cur.left(self), Some(cur.right(self)))
+        //         } else {
+        //             (cur, None)
+        //         };
+        //         if let Some(pos) = lconj.iter().position(|&x| x == v) {
+        //             lconj.swap_remove(pos);
+        //             common = self.mk_inter(v, common);
+        //         } else {
+        //             r_rest = self.mk_inter(v, r_rest);
+        //         }
+        //         match next {
+        //             Some(n) => cur = n,
+        //             None => break,
+        //         }
+        //     }
+        //     if lconj.len() < lconj_initial {
+        //         let l_rest = lconj
+        //             .iter()
+        //             .fold(NodeId::TS, |acc, &v| self.mk_inter(v, acc));
+        //         let inner_union = self.mk_union(l_rest, r_rest);
+        //         return Some(self.mk_inter(common, inner_union));
+        //     }
+        // }
 
         if left.is_pred(self) && right.is_pred(self) {
             let l = left.pred_tset(self);
@@ -2860,6 +2885,24 @@ impl RegexBuilder {
     }
 
     fn attempt_rw_inter_2(&mut self, left: NodeId, right: NodeId) -> Option<NodeId> {
+        #[cfg(feature = "reentrant-assert")]
+        if !self.rw_active.insert((Kind::Inter, left, right)) {
+            #[cfg(debug_assertions)]
+            panic!(
+                "reentrant inter rewrite {:?} & {:?}, this is a bug, please file an issue with the pattern",
+                self.pp(left),
+                self.pp(right)
+            );
+            #[cfg(not(debug_assertions))]
+            return None;
+        }
+        let r = self.attempt_rw_inter_2_inner(left, right);
+        #[cfg(feature = "reentrant-assert")]
+        self.rw_active.remove(&(Kind::Inter, left, right));
+        r
+    }
+
+    fn attempt_rw_inter_2_inner(&mut self, left: NodeId, right: NodeId) -> Option<NodeId> {
         if cfg!(feature = "norewrite") {
             return None;
         }
@@ -2984,6 +3027,24 @@ impl RegexBuilder {
             if let Some(pright) = right.is_pred_star(self) {
                 let merged = self.mk_inter(pleft, pright);
                 return Some(self.mk_star(merged));
+            }
+        }
+
+        for (star, lb) in [(left, right), (right, left)] {
+            if star.is_star(self) && lb.is_lookbehind(self) {
+                return Some(lb);
+            }
+        }
+
+        for (star, pred) in [(left, right), (right, left)] {
+            if let Some(star_pred) = star.is_pred_star(self) {
+                if pred.is_pred(self) {
+                    let sp = star_pred.pred_tset(self);
+                    let op = pred.pred_tset(self);
+                    if self.solver().and_id(sp, op) == TSetId::EMPTY {
+                        return Some(NodeId::BOT);
+                    }
+                }
             }
         }
 
