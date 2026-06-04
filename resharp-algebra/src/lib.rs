@@ -2590,10 +2590,17 @@ impl RegexBuilder {
         // re-entrancy guard. the union/intersection distribution rewrites are
         // mutually recursive through mk_union/mk_inter and can ping-pong on the
         // same (kind, left, right) operand shape without ever reaching a
-        // fixpoint, overflowing the stack (an uncatchable abort). declining the
-        // rewrite on re-entry is sound: mk_union then builds the plain `Union`
-        // node, which has identical language semantics.
+        // fixpoint, overflowing the stack (an uncatchable abort). re-entry means
+        // the rewrite is failing to converge, which should not happen: in debug
+        // we fail loud so the latent non-termination is visible and fixable at
+        // the source. release keeps the guard and declines the rewrite, which is
+        // sound: mk_union then builds the plain `Union` node, with identical
+        // language semantics, so production never hits the uncatchable abort.
         if !self.rw_active.insert((1u8, left, right)) {
+            debug_assert!(
+                false,
+                "attempt_rw_union_2 re-entered on ({left:?}, {right:?}): distribution rewrite is not reaching a fixpoint"
+            );
             return None;
         }
         let r = self.attempt_rw_union_2_inner(left, right);
@@ -2880,10 +2887,14 @@ impl RegexBuilder {
     }
 
     fn attempt_rw_inter_2(&mut self, left: NodeId, right: NodeId) -> Option<NodeId> {
-        // re-entrancy guard; see attempt_rw_union_2. declining the rewrite on
-        // re-entry is sound: mk_inter then builds the plain `Inter` node, which
-        // has identical language semantics.
+        // re-entrancy guard; see attempt_rw_union_2. debug fails loud on the
+        // non-converging rewrite; release declines it soundly (mk_inter builds
+        // the plain `Inter` node, with identical language semantics).
         if !self.rw_active.insert((0u8, left, right)) {
+            debug_assert!(
+                false,
+                "attempt_rw_inter_2 re-entered on ({left:?}, {right:?}): distribution rewrite is not reaching a fixpoint"
+            );
             return None;
         }
         let r = self.attempt_rw_inter_2_inner(left, right);
