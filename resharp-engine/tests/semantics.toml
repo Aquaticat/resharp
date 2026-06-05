@@ -62,3 +62,55 @@ name = "semantic_lookbehind_boolean_log"
 pattern = '(?<=6|8\(|4|8|0\().*&~(.*\)\:.*)&\w.*&.*\w&.*(?=.*\)\:)&.*(?=\)\:|\)\:)'
 input = "\nJan 12 06:26:19: ACCEPT service http from 119.63.193.196 to firewall(pub-nic), prefix: \"none\" (in: eth0 119.63.193.196(5c:0a:5b:63:4a:82):4399 -> 140.105.63.164(50:06:04:92:53:44):80 TCP flags: ****S* len:60 ttl:32)\nJan 12 06:26:20: ACCEPT service dns from 140.105.48.16 to firewall(pub-nic-dns), prefix: \"none\" (in: eth0 140.105.48.16(00:21:dd:bc:95:44):4263 -> 140.105.63.158(00:14:31:83:c6:8d):53 UDP len:576 ttl:64)"
 matches = [[48, 137], [140, 179], [260, 354], [357, 396]]
+
+# Regression: in ascii mode the bare negated shorthands \D \S \W must negate the
+# byte class (consume exactly one non-class byte), not take the language
+# complement, which wrongly made them nullable and match "".
+[[test]]
+name = "ascii_neg_digit_not_nullable_empty"
+pattern = '\D'
+input = ""
+ascii = true
+matches = []
+
+[[test]]
+name = "ascii_neg_digit_rejects_digit"
+pattern = '\D'
+input = "5"
+ascii = true
+matches = []
+
+[[test]]
+name = "ascii_neg_digit_matches_nondigit"
+pattern = '\D'
+input = "x"
+ascii = true
+matches = [[0, 1]]
+
+[[test]]
+name = "ascii_neg_space_not_nullable_empty"
+pattern = '\S'
+input = ""
+ascii = true
+matches = []
+
+[[test]]
+name = "ascii_neg_word_not_nullable_empty"
+pattern = '\W'
+input = ""
+ascii = true
+matches = []
+
+[[test]]
+name = "ascii_neg_word_rejects_word_byte"
+pattern = '\W'
+input = "_"
+ascii = true
+matches = []
+
+[[test]]
+name = "ascii_star_then_neg_digit_requires_nondigit"
+pattern = 'a*\D'
+input = "0"
+ascii = true
+matches = []
