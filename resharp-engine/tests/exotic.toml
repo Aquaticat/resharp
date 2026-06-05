@@ -354,6 +354,7 @@ name = "wb_digit_dot_plus_xdot"
 pattern = '\b[\d.]+'
 input = "x."
 vs_regex = true
+matches = [[1, 2]]
 
 [[test]]
 name = "wb_digit_dot_plus_a1"
@@ -366,18 +367,21 @@ name = "wb_digit_dot_plus_a_1_dot"
 pattern = '\b[\d.]+'
 input = "a 1 ."
 vs_regex = true
+matches = [[2, 3]]
 
 [[test]]
 name = "wb_digit_dot_plus_pi"
 pattern = '\b[\d.]+'
 input = "3.14 x.5"
 vs_regex = true
+matches = [[0, 4], [6, 8]]
 
 [[test]]
 name = "wb_digit_dot_plus_dot5a"
 pattern = '\b[\d.]+'
 input = ".5a 2"
 vs_regex = true
+matches = [[1, 2], [4, 5]]
 
 [[test]]
 name = "wb_digit_dot_one_a16"
@@ -390,6 +394,7 @@ name = "wb_digit_dot_one_xdot"
 pattern = '\b[\d.]'
 input = "x."
 vs_regex = true
+matches = [[1, 2]]
 
 [[test]]
 name = "wb_digit_dot_one_a1"
@@ -402,18 +407,21 @@ name = "wb_digit_dot_one_a_1_dot"
 pattern = '\b[\d.]'
 input = "a 1 ."
 vs_regex = true
+matches = [[2, 3]]
 
 [[test]]
 name = "wb_digit_dot_one_pi"
 pattern = '\b[\d.]'
 input = "3.14 x.5"
 vs_regex = true
+matches = [[0, 1], [1, 2], [2, 3], [6, 7], [7, 8]]
 
 [[test]]
 name = "wb_digit_dot_one_dot5a"
 pattern = '\b[\d.]'
 input = ".5a 2"
 vs_regex = true
+matches = [[1, 2], [4, 5]]
 
 [[test]]
 name = "wb_09_dot_plus_a16"
@@ -426,6 +434,7 @@ name = "wb_09_dot_plus_xdot"
 pattern = '\b[0-9.]+'
 input = "x."
 vs_regex = true
+matches = [[1, 2]]
 
 [[test]]
 name = "wb_09_dot_plus_a1"
@@ -438,18 +447,21 @@ name = "wb_09_dot_plus_a_1_dot"
 pattern = '\b[0-9.]+'
 input = "a 1 ."
 vs_regex = true
+matches = [[2, 3]]
 
 [[test]]
 name = "wb_09_dot_plus_pi"
 pattern = '\b[0-9.]+'
 input = "3.14 x.5"
 vs_regex = true
+matches = [[0, 4], [6, 8]]
 
 [[test]]
 name = "wb_09_dot_plus_dot5a"
 pattern = '\b[0-9.]+'
 input = ".5a 2"
 vs_regex = true
+matches = [[1, 2], [4, 5]]
 
 [[test]]
 name = "wb_09_dot_one_a16"
@@ -462,6 +474,7 @@ name = "wb_09_dot_one_xdot"
 pattern = '\b[0-9.]'
 input = "x."
 vs_regex = true
+matches = [[1, 2]]
 
 [[test]]
 name = "wb_09_dot_one_a1"
@@ -474,18 +487,21 @@ name = "wb_09_dot_one_a_1_dot"
 pattern = '\b[0-9.]'
 input = "a 1 ."
 vs_regex = true
+matches = [[2, 3]]
 
 [[test]]
 name = "wb_09_dot_one_pi"
 pattern = '\b[0-9.]'
 input = "3.14 x.5"
 vs_regex = true
+matches = [[0, 1], [1, 2], [2, 3], [6, 7], [7, 8]]
 
 [[test]]
 name = "wb_09_dot_one_dot5a"
 pattern = '\b[0-9.]'
 input = ".5a 2"
 vs_regex = true
+matches = [[1, 2], [4, 5]]
 
 [[test]]
 name = "alt_embedded_line_anchor_caret"

@@ -1445,7 +1445,10 @@ impl<'s> ResharpParser<'s> {
                     &r.op.kind,
                     ast::RepetitionKind::ZeroOrMore
                         | ast::RepetitionKind::ZeroOrOne
-                        | ast::RepetitionKind::Range(ast::RepetitionRange::Bounded(0, _))
+                        | ast::RepetitionKind::Range(
+                            ast::RepetitionRange::Bounded(0, _)
+                                | ast::RepetitionRange::Exactly(0)
+                        )
                 );
                 if nullable {
                     match inner {
@@ -1460,6 +1463,11 @@ impl<'s> ResharpParser<'s> {
             Ast::Lookaround(la) => match la.kind {
                 ast::LookaroundKind::PositiveLookahead
                 | ast::LookaroundKind::PositiveLookbehind => Self::word_char_kind(&la.ast, left),
+                _ => Unknown,
+            },
+            Ast::Assertion(a) => match (&a.kind, left) {
+                (ast::AssertionKind::EndText, false) => NonWord,
+                (ast::AssertionKind::StartText, true) => NonWord,
                 _ => Unknown,
             },
             _ => Unknown,
@@ -1484,7 +1492,10 @@ impl<'s> ResharpParser<'s> {
                     &r.op.kind,
                     ast::RepetitionKind::ZeroOrMore
                         | ast::RepetitionKind::ZeroOrOne
-                        | ast::RepetitionKind::Range(ast::RepetitionRange::Bounded(0, _))
+                        | ast::RepetitionKind::Range(
+                            ast::RepetitionRange::Bounded(0, _)
+                                | ast::RepetitionRange::Exactly(0)
+                        )
                 );
                 if nullable {
                     None
@@ -1602,6 +1613,10 @@ impl<'s> ResharpParser<'s> {
                 ast::LookaroundKind::PositiveLookbehind
                 | ast::LookaroundKind::NegativeLookbehind => dir > 0,
             },
+            Ast::Repetition(r) => matches!(
+                &r.op.kind,
+                ast::RepetitionKind::Range(ast::RepetitionRange::Exactly(0))
+            ),
             _ => false,
         }
     }
@@ -1655,6 +1670,14 @@ impl<'s> ResharpParser<'s> {
             let l = if k == 0 {
                 WordCharKind::Edge
             } else {
+                use resharp_algebra::Kind;
+                if tb.get_kind(children[k - 1]) == Kind::End
+                    && (children[k] == wb || children[k] == non_wb)
+                {
+                    return Err(
+                        self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex)
+                    );
+                }
                 Self::classify(tb, children[k - 1], word_suf, non_word_suf)
             };
             let r = if k + 1 >= len {
@@ -1734,7 +1757,7 @@ impl<'s> ResharpParser<'s> {
                     b.mk_neg_lookbehind(word)
                 }
             }
-            _ => return None,
+            _ => return Some(node),
         };
         Some(result)
     }
@@ -2174,14 +2197,23 @@ impl<'s> ResharpParser<'s> {
                         }
                         _ => {}
                     }
-                    prev_boundary_child = None;
                     match concat_translator {
                         Some(_) => match self.ast_to_node_id(ast, &mut concat_translator, tb) {
-                            Ok(node_id) => children.push(node_id),
+                            Ok(node_id) => {
+                                if node_id != resharp_algebra::NodeId::EPS {
+                                    prev_boundary_child = None;
+                                    children.push(node_id);
+                                }
+                            }
                             Err(err) => return Err(err),
                         },
                         None => match self.ast_to_node_id(ast, translator, tb) {
-                            Ok(node_id) => children.push(node_id),
+                            Ok(node_id) => {
+                                if node_id != resharp_algebra::NodeId::EPS {
+                                    prev_boundary_child = None;
+                                    children.push(node_id);
+                                }
+                            }
                             Err(err) => return Err(err),
                         },
                     }

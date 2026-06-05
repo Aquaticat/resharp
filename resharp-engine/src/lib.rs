@@ -881,8 +881,8 @@ fn ensure_begin_leading(
         Kind::Concat => {
             let l = node.left(b);
             ensure_begin_leading(b, l, at_start)?;
-            let (_, lmax) = b.get_min_max_length(l);
-            ensure_begin_leading(b, node.right(b), at_start && lmax == 0)
+            let (lmin, _) = b.get_min_max_length(l);
+            ensure_begin_leading(b, node.right(b), at_start && lmin == 0)
         }
         Kind::Union | Kind::Inter => {
             ensure_begin_leading(b, node.left(b), at_start)?;

@@ -2538,16 +2538,24 @@ fn bug9_stream_nonempty_when_is_match_true() {
 }
 
 #[test]
+fn bug27_word_boundary_nullable_composition() {
+    let re = resharp::Regex::new(r"\ba{0}\b").unwrap();
+    assert_eq!(re.is_match(b"").unwrap(), false, r"\ba{{0}}\b on empty: expected false");
+    let re = resharp::Regex::new(r"\Ba{0}\z").unwrap();
+    assert_eq!(re.is_match(b"").unwrap(), true, r"\Ba{{0}}\z on empty: expected true");
+}
+
+#[test]
 fn bug23_full_unicode_w_bounded_repeat_compile_time() {
     // TODO: currently working as intended
-    // there is an option to bake it in but if 
+    // there is an option to bake it in but i would not touch it 
     // it matters you can always serialize the compiled regex and load
 
     // let full = || resharp::RegexOptions::default().unicode(resharp::UnicodeMode::Full);
     // let re = resharp::Regex::with_options(r"\w{3}", full()).unwrap();
     // assert_eq!(re.is_match(b"abc").unwrap(), true);
     // assert_eq!(re.is_match(b"ab").unwrap(), false);
-    // compile-time must not blow up
+    // // compile-time must not blow up
     // let t = std::time::Instant::now();
     // let _ = resharp::Regex::with_options(r"\w{8}", full()).unwrap();
     // that pattern with all optimizations enabled, in the future maybe reinvestigate
@@ -2664,6 +2672,20 @@ fn bug20_find_anchored_respects_leading_assertion_at_begin() {
         Some(resharp::Match { start: 0, end: 1 }),
         "find_anchored should return Some(0..1) for \\b0"
     );
+}
+
+#[test]
+fn bug26_end_before_begin_anchor_matches_empty_string() {
+    let re = Regex::new(r"\z\A").unwrap();
+    assert_eq!(re.is_match(b"").unwrap(), true, "\\z\\A must match empty string");
+    assert_eq!(re.is_match(b"x").unwrap(), false, "\\z\\A must not match non-empty");
+    assert_eq!(
+        re.find_all(b"").unwrap(),
+        vec![resharp::Match { start: 0, end: 0 }]
+    );
+    let re2 = Regex::new(r"\za*\A").unwrap();
+    assert_eq!(re2.is_match(b"").unwrap(), true, "\\za*\\A must match empty string");
+    assert_eq!(re2.is_match(b"a").unwrap(), false, "\\za*\\A must not match non-empty");
 }
 
 #[test]

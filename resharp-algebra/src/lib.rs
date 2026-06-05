@@ -3253,7 +3253,7 @@ impl RegexBuilder {
 
         if self.get_kind(head) == Kind::End
             && !tail.is_lookbehind(self)
-            && !self.is_nullable(tail, Nullability::END)
+            && !self.is_nullable(tail, Nullability::EMPTYSTRING)
         {
             return NodeId::BOT;
         }
