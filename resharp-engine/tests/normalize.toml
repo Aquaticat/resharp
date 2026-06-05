@@ -168,3 +168,14 @@ pp = '(~(_*abc_*)&([\x00-\x7F]|[\xC0-\xDF][\x80-\xBF]|[\xE0-\xEF][\x80-\xBF][\x8
 name = 'stacked_lookbehind_a_b'
 pattern = '(?<=a)(?<=b)x'
 pp = '(?<=(_*a&_*b))x'
+
+[[test]]
+name = 'plus_star'
+pattern = '(.+)*'
+pp = '.*'
+
+[[test]]
+name = 'sub_union'
+pattern = '.*|.*(.+)*.+'
+pp = '.*'
+

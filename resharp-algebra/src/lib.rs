@@ -1751,8 +1751,11 @@ impl RegexBuilder {
                 let rhs = node_id.right(self);
                 if lhs.is_pred_star(self).is_some() {
                     if let Some(opttail) = rhs.is_opt_v(self) {
-                        if let Some(true) = self.subsumes(lhs, opttail) {
-                            return Some(lhs);
+                        let (_, max) = self.get_min_max_length(node_id);
+                        if max <= u32::MAX {
+                            if let Some(true) = self.subsumes(lhs, opttail) {
+                                return Some(lhs);
+                            }
                         }
                     }
                 }
@@ -3761,6 +3764,10 @@ impl RegexBuilder {
         // _*{500} is still _*
         if body_id.is_kind(self, Kind::Star) {
             return body_id;
+        }
+        // (P+)* = P* since (P·P*)* = P*
+        if body_id.is_plus(self) {
+            return body_id.right(self);
         }
         self.get_node_id(key)
     }
