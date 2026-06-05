@@ -957,12 +957,24 @@ impl LDFA {
                         )
                     };
                 }
-                assert_ne!(NO_MATCH, l_max_end, "correctness issue found");
-                matches.push(Match {
-                    start: 0,
-                    end: l_max_end,
-                });
-                next_start = l_max_end;
+                // The forward scan from the reverse-proposed start 0 found no
+                // end (l_max_end stayed at NO_MATCH): the reverse pass and the
+                // forward language disagree. The forward DFA is the authority on
+                // whether a match starts here, so skip the over-proposed
+                // candidate instead of aborting the host (was assert_ne!, BUG-2)
+                // or pushing NO_MATCH as a Match end (BUG-4). debug_assert keeps
+                // the disagreement loud in debug builds.
+                debug_assert_ne!(
+                    NO_MATCH, l_max_end,
+                    "find_all: forward scan found no end for reverse-proposed start 0"
+                );
+                if l_max_end != NO_MATCH {
+                    matches.push(Match {
+                        start: 0,
+                        end: l_max_end,
+                    });
+                    next_start = l_max_end;
+                }
                 break;
             }
         }
@@ -1006,11 +1018,17 @@ impl LDFA {
                             l_max_end,
                         )
                     };
-                    matches.push(Match {
-                        start: nulls[i],
-                        end: l_max_end,
-                    });
-                    next_start = l_max_end;
+                    debug_assert_ne!(
+                        NO_MATCH, l_max_end,
+                        "find_all: forward scan found no end for reverse-proposed start"
+                    );
+                    if l_max_end != NO_MATCH {
+                        matches.push(Match {
+                            start: nulls[i],
+                            end: l_max_end,
+                        });
+                        next_start = l_max_end;
+                    }
                     break;
                 }
                 debug_assert!(
@@ -1019,11 +1037,17 @@ impl LDFA {
                     l_max_end,
                     nulls[i]
                 );
-                matches.push(Match {
-                    start: nulls[i],
-                    end: l_max_end,
-                });
-                next_start = l_max_end;
+                debug_assert_ne!(
+                    NO_MATCH, l_max_end,
+                    "find_all: forward scan found no end for reverse-proposed start"
+                );
+                if l_max_end != NO_MATCH {
+                    matches.push(Match {
+                        start: nulls[i],
+                        end: l_max_end,
+                    });
+                    next_start = l_max_end;
+                }
                 break;
             }
         }
