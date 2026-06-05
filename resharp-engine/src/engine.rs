@@ -812,12 +812,13 @@ impl LDFA {
         }
     }
 
-    pub fn scan_fwd_slow(
+    /// attempt to scan from this pos: may return non-match
+    pub(crate) fn scan_fwd_slow(
         &mut self,
         b: &mut RegexBuilder,
         pos_begin: usize,
         data: &[u8],
-    ) -> Result<usize, Error> {
+    ) -> Result<Option<usize>, Error> {
         let mut max_end: usize = if self.initial_nullability.has(if pos_begin == 0 {
             Nullability::BEGIN
         } else {
@@ -831,7 +832,7 @@ impl LDFA {
         let mt = self.mt_lookup[data[pos_begin] as usize];
         let mut curr = self.begin_table[mt as usize] as u32;
         if curr <= DFA_DEAD as u32 {
-            return Ok(max_end);
+            return Ok((max_end != NO_MATCH).then_some(max_end));
         }
         let end = data.len();
         let mut pos = pos_begin + 1;
@@ -851,7 +852,7 @@ impl LDFA {
         );
 
         if pos == end {
-            return Ok(max_end);
+            return Ok((max_end != NO_MATCH).then_some(max_end));
         }
 
         loop {
@@ -895,7 +896,7 @@ impl LDFA {
             }
         }
 
-        Ok(max_end)
+        Ok((max_end != NO_MATCH).then_some(max_end))
     }
 
     /// scan_fwd_all is guaranteed to find a match, given a valid, pre-checked start position
@@ -918,7 +919,6 @@ impl LDFA {
         let mut i = nulls.len();
 
         if nulls[nulls.len() - 1] == 0 {
-            // println!("{:?}","pos:0");
             i = i - 1;
             l_pos = 0;
             let mut l_max_end: usize = if self.initial_nullability.has(Nullability::BEGIN) {
@@ -960,13 +960,6 @@ impl LDFA {
                         )
                     };
                 }
-                // The forward scan from the reverse-proposed start 0 found no
-                // end (l_max_end stayed at NO_MATCH): the reverse pass and the
-                // forward language disagree. The forward DFA is the authority on
-                // whether a match starts here, so skip the over-proposed
-                // candidate instead of aborting the host (was assert_ne!, BUG-2)
-                // or pushing NO_MATCH as a Match end (BUG-4). debug_assert keeps
-                // the disagreement loud in debug builds.
                 debug_assert_ne!(
                     NO_MATCH, l_max_end,
                     "find_all: forward scan found no end for reverse-proposed start 0"
@@ -1162,9 +1155,9 @@ impl LDFA {
         state: u32,
         pos_begin: usize,
         data: &[u8],
-    ) -> Result<usize, Error> {
+    ) -> Result<Option<usize>, Error> {
         if state <= DFA_DEAD as u32 {
-            return Ok(NO_MATCH);
+            return Ok(None);
         }
         let end = data.len();
         let mut pos = pos_begin;
@@ -1189,7 +1182,7 @@ impl LDFA {
                 Nullability::END,
                 &mut max_end,
             );
-            return Ok(max_end);
+            return Ok((max_end != NO_MATCH).then_some(max_end));
         }
 
         loop {
@@ -1230,7 +1223,7 @@ impl LDFA {
             }
         }
 
-        Ok(max_end)
+        Ok((max_end != NO_MATCH).then_some(max_end))
     }
 
     pub fn scan_rev_from(
@@ -1239,15 +1232,15 @@ impl LDFA {
         end: usize,
         begin: usize,
         data: &[u8],
-    ) -> Result<usize, Error> {
+    ) -> Result<Option<usize>, Error> {
         if end == 0 || end > data.len() || end <= begin {
-            return Ok(NO_MATCH);
+            return Ok(None);
         }
         let start_pos = end - 1;
         let mt = self.mt_lookup[data[start_pos] as usize] as u32;
         let mut curr = self.begin_table[mt as usize] as u32;
         if curr <= DFA_DEAD as u32 {
-            return Ok(NO_MATCH);
+            return Ok(None);
         }
 
         let mut min_start = NO_MATCH;
@@ -1295,7 +1288,7 @@ impl LDFA {
             );
         }
 
-        Ok(min_start)
+        Ok((min_start != NO_MATCH).then_some(min_start))
     }
 
     pub(crate) fn can_skip(&self) -> bool {

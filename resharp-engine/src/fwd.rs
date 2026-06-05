@@ -28,16 +28,17 @@ fn fwd_prefix_impl<const IS_MATCH: bool>(
         let mt = fwd.mt_lookup[input[0] as usize];
         let state = fwd.begin_table[mt as usize] as u32;
         if state != fwd.pruned as u32 {
-            let max_end = fwd.scan_fwd_from(b, state, 1, input)?;
-            if max_end != engine::NO_MATCH && max_end > 0 {
-                if IS_MATCH {
-                    return Ok(true);
+            if let Some(max_end) = fwd.scan_fwd_from(b, state, 1, input)? {
+                if max_end > 0 {
+                    if IS_MATCH {
+                        return Ok(true);
+                    }
+                    matches.push(Match {
+                        start: 0,
+                        end: max_end,
+                    });
+                    search_start = max_end;
                 }
-                matches.push(Match {
-                    start: 0,
-                    end: max_end,
-                });
-                search_start = max_end;
             }
         }
     }
@@ -45,18 +46,18 @@ fn fwd_prefix_impl<const IS_MATCH: bool>(
     while let Some(candidate) = fwd_prefix.find_fwd(input, search_start) {
         let state = fwd.walk_input(b, candidate, prefix_len, input)?;
         if state != 0 {
-            let max_end =
-                fwd.scan_fwd_from(b, state, candidate + prefix_len, input)?;
-            if max_end != engine::NO_MATCH && max_end > candidate {
-                if IS_MATCH {
-                    return Ok(true);
+            if let Some(max_end) = fwd.scan_fwd_from(b, state, candidate + prefix_len, input)? {
+                if max_end > candidate {
+                    if IS_MATCH {
+                        return Ok(true);
+                    }
+                    matches.push(Match {
+                        start: candidate,
+                        end: max_end,
+                    });
+                    search_start = max_end;
+                    continue;
                 }
-                matches.push(Match {
-                    start: candidate,
-                    end: max_end,
-                });
-                search_start = max_end;
-                continue;
             }
         }
         search_start = candidate + 1;
@@ -81,8 +82,7 @@ fn try_emit_zero_width<const IS_MATCH: bool>(
     if fwd_prefix.find_fwd(input, lb_pos) != Some(lb_pos) {
         return Ok(false);
     }
-    let zw = fwd.scan_fwd_from(b, engine::DFA_INITIAL as u32, at, input)?;
-    if zw == at {
+    if fwd.scan_fwd_from(b, engine::DFA_INITIAL as u32, at, input)? == Some(at) {
         if IS_MATCH {
             return Ok(true);
         }
@@ -104,8 +104,7 @@ fn fwd_lb_prefix_impl<const IS_MATCH: bool>(
     let mut search_start = 0;
 
     if fwd_lb_begin_nullable {
-        let max_end = fwd.scan_fwd_slow(b, 0, input)?;
-        if max_end != engine::NO_MATCH {
+        if let Some(max_end) = fwd.scan_fwd_slow(b, 0, input)? {
             if IS_MATCH {
                 return Ok(true);
             }
@@ -124,13 +123,12 @@ fn fwd_lb_prefix_impl<const IS_MATCH: bool>(
 
     while let Some(candidate) = fwd_prefix.find_fwd(input, search_start) {
         let body_start = candidate + lb_len;
-        let max_end = fwd.scan_fwd_from(
+        if let Some(max_end) = fwd.scan_fwd_from(
             b,
             engine::DFA_INITIAL as u32,
             body_start,
             input,
-        )?;
-        if max_end != engine::NO_MATCH {
+        )? {
             if IS_MATCH {
                 return Ok(true);
             }

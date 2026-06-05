@@ -1521,7 +1521,7 @@ impl Regex {
 
     #[cfg(feature = "diag")]
     #[allow(missing_docs)]
-    pub fn scan_fwd_debug(&self, input: &[u8], pos: usize) -> usize {
+    pub fn scan_fwd_debug(&self, input: &[u8], pos: usize) -> Option<usize> {
         let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner.fwd.scan_fwd_slow(&mut inner.b, pos, input).unwrap()
     }
@@ -1705,12 +1705,13 @@ impl Regex {
         let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let mut pos = 0;
         while pos < input.len() {
-            let max_end = inner.fwd.scan_fwd_slow(&mut inner.b, pos, input)?;
-            if max_end != engine::NO_MATCH && max_end > pos {
-                return Ok(vec![Match {
-                    start: pos,
-                    end: max_end,
-                }]);
+            if let Some(max_end) = inner.fwd.scan_fwd_slow(&mut inner.b, pos, input)? {
+                if max_end > pos {
+                    return Ok(vec![Match {
+                        start: pos,
+                        end: max_end,
+                    }]);
+                }
             }
             pos += 1;
         }
@@ -1749,11 +1750,6 @@ impl Regex {
             }
             return Ok(matches.clone());
         }
-        if self.rev_trivial && !self.hardened {
-            Self::find_all_nullable_slow(&mut inner.fwd, &mut inner.b, input, &mut inner.matches)?;
-            return Ok(inner.matches.clone());
-        }
-
         if self.initial_nullability.has(Nullability::END) {
             inner.nulls.push(input.len());
         }
@@ -1816,47 +1812,6 @@ impl Regex {
         Ok(inner.matches.clone())
     }
 
-    fn find_all_nullable_slow(
-        fwd: &mut engine::LDFA,
-        b: &mut RegexBuilder,
-        input: &[u8],
-        matches: &mut Vec<Match>,
-    ) -> Result<(), Error> {
-        let mut pos = 0;
-        while pos < input.len() {
-            let max_end = fwd.scan_fwd_slow(b, pos, input)?;
-            if max_end != engine::NO_MATCH && max_end > pos {
-                matches.push(Match {
-                    start: pos,
-                    end: max_end,
-                });
-                pos = max_end;
-            } else if max_end != engine::NO_MATCH {
-                matches.push(Match {
-                    start: pos,
-                    end: pos,
-                });
-                pos += 1;
-            } else {
-                pos += 1;
-            }
-        }
-        // trailing empty at end-of-input
-        let end_null = engine::has_any_null(
-            &fwd.effects_id,
-            &fwd.effects,
-            engine::DFA_INITIAL as u32,
-            Nullability::END,
-        );
-        if end_null {
-            matches.push(Match {
-                start: input.len(),
-                end: input.len(),
-            });
-        }
-        Ok(())
-    }
-
     /// longest match anchored at position 0.
     ///
     /// returns `None` if the pattern does not match at position 0.
@@ -1877,21 +1832,12 @@ impl Regex {
                 return Ok(None);
             }
         }
-        let max_end = inner.fwd.scan_fwd_slow(&mut inner.b, 0, input)?;
-        if max_end != engine::NO_MATCH {
-            Ok(Some(Match {
-                start: 0,
-                end: max_end,
-            }))
-        } else {
-            Ok(None)
-        }
+        Ok(inner.fwd.scan_fwd_slow(&mut inner.b, 0, input)?.map(|end| Match { start: 0, end }))
     }
 
     pub(crate) fn is_match_fwd_ts(&self, input: &[u8]) -> Result<bool, Error> {
         let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let max_end = inner.fwd_ts.scan_fwd_slow(&mut inner.b, 0, input)?;
-        Ok(max_end != engine::NO_MATCH)
+        Ok(inner.fwd_ts.scan_fwd_slow(&mut inner.b, 0, input)?.is_some())
     }
 
     /// whether the pattern matches anywhere in the input.

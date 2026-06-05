@@ -246,11 +246,7 @@ fn try_emit_step<const REV: bool, F: FnMut(usize, usize)>(
         let rev = inner.rev.as_mut().unwrap();
         let s = rev.scan_rev_from(&mut inner.b, match_end, *last_match_end, input)?;
         *last_match_end = match_end;
-        if s == engine::NO_MATCH {
-            match_end
-        } else {
-            s
-        }
+        s.unwrap_or(match_end)
     } else {
         match_end
     };
