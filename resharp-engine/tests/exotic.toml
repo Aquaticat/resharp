@@ -646,3 +646,14 @@ pattern = '(?!\A)(?=[A-Z])'
 input = "aB"
 matches = [[1, 1]]
 
+[[test]]
+name = "la_anchored"
+pattern = '(^|b)'
+input = "a"
+matches = [[0,0]]
+
+[[test]]
+name = "nullable_lb_union_word_boundary_comma"
+pattern = '\B|,'
+expect_error = true
+reason = "\\B is a zero-width lookbehind; union with nullable lb branch alongside non-lb branch is unsupported"

@@ -677,7 +677,13 @@ fn union_branches_distinguishable(b: &mut RegexBuilder, union_node: NodeId) -> b
         };
         let first = match sets.first() {
             Some(&s) => s,
-            None => continue,
+            None => {
+                let (min, _) = b.get_min_max_length(br);
+                if min == 0 {
+                    return false;
+                }
+                continue;
+            }
         };
         firsts.push((has_lb, first, lb_node));
     }

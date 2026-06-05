@@ -260,7 +260,7 @@ impl LDFA {
         let mut prune_memo: FxHashMap<NodeId, NodeId> = FxHashMap::default();
 
         // state 2
-        let _ = register_state(
+        register_state(
             &mut state_nodes,
             &mut node_to_state,
             &mut effects_id,
@@ -268,6 +268,7 @@ impl LDFA {
             &mut effects,
             b,
             initial,
+            true,
         );
 
         // state 3
@@ -281,6 +282,7 @@ impl LDFA {
             &mut effects,
             b,
             initial_pruned,
+            false,
         );
 
         let der0 = b.der(initial, Nullability::BEGIN)?;
@@ -300,6 +302,7 @@ impl LDFA {
                 &mut effects,
                 b,
                 t,
+                false,
             );
             if state_nodes.len() > max_capacity {
                 return Err(Error::CapacityExceeded);
@@ -318,14 +321,8 @@ impl LDFA {
         while effects.len() < b.nulls_count() {
             effects.push(b.nulls_entry_vec(effects.len() as u32));
         }
-        // in case initial state is bot
-        if effects_id.len() <= DFA_INITIAL as usize {
-            effects_id.resize(DFA_INITIAL as usize + 1, 0u16);
-            center_effect_id.resize(DFA_INITIAL as usize + 1, EID_NONE as u16);
-        }
         let skip_ids = vec![0u8; state_nodes.len()];
-
-        Ok(LDFA {
+        let mut dfa = LDFA {
             pruned: pruned_sid,
             prune_memo,
             begin_table,
@@ -345,7 +342,10 @@ impl LDFA {
             is_forward,
             has_anchors: b.contains_anchors(initial),
             initial_nullability: b.nullability(initial),
-        })
+        };
+        dfa.ensure_capacity(pruned_sid);
+
+        Ok(dfa)
     }
 
     #[inline(always)]
@@ -384,6 +384,7 @@ impl LDFA {
             &mut self.effects,
             b,
             node,
+            false,
         );
         self.ensure_capacity(sid);
         sid
@@ -1504,7 +1505,11 @@ impl LDFA {
         #[cfg(feature = "debug")]
         {
             let delta = self.dfa_delta(sid, mt);
-            let cached = if delta < self.center_table.len() { self.center_table[delta] } else { DFA_MISSING };
+            let cached = if delta < self.center_table.len() {
+                self.center_table[delta]
+            } else {
+                DFA_MISSING
+            };
             eprintln!("[handle_rev_end] sid={sid} mt={mt} delta={delta} center_cached={cached}");
         }
         let new_state = self.lazy_transition(b, sid, mt)?;
@@ -2136,6 +2141,35 @@ fn scan_fwd<const SKIP: bool>(
     (l_state, l_pos, max_end, false)
 }
 
+pub fn ensure_capacity(
+    effects_id: &mut Vec<u16>,
+    center_effect_id: &mut Vec<u16>,
+    mt_log: usize,
+    center_table: &mut Vec<u32>,
+    skip_ids: &mut Vec<u8>,
+    state_id: u16,
+) {
+    let cap = state_id as usize + 1;
+    if cap > effects_id.len() {
+        let new_len = effects_id.len().max(4) * 2;
+        let new_len = new_len.max(cap);
+        effects_id.resize(new_len, 0u16);
+        center_effect_id.resize(new_len, EID_NONE as u16);
+    }
+    let stride = 1usize << mt_log;
+    let needed = cap * stride;
+    if needed > center_table.len() {
+        let new_len = center_table.len().max(4) * 2;
+        let new_len = new_len.max(needed);
+        center_table.resize(new_len, DFA_MISSING.into());
+    }
+    if cap > skip_ids.len() {
+        let new_len = skip_ids.len().max(4) * 2;
+        let new_len = new_len.max(cap);
+        skip_ids.resize(new_len, 0u8);
+    }
+}
+
 fn register_state(
     state_nodes: &mut Vec<NodeId>,
     node_to_state: &mut HashMap<NodeId, u16>,
@@ -2144,13 +2178,18 @@ fn register_state(
     effects: &mut Vec<Vec<NullState>>,
     b: &mut RegexBuilder,
     node: NodeId,
+    force: bool,
 ) -> u16 {
-    if let Some(&sid) = node_to_state.get(&node) {
-        return sid;
+    if !force {
+        if let Some(&sid) = node_to_state.get(&node) {
+            return sid;
+        }
     }
     let sid = state_nodes.len() as u16;
     state_nodes.push(node);
-    node_to_state.insert(node, sid);
+    if !node_to_state.contains_key(&node) {
+        node_to_state.insert(node, sid);
+    }
     let eff_id = b.get_nulls_id(node);
     let eid = b.center_nulls_id(eff_id);
     if sid as usize >= effects_id.len() {

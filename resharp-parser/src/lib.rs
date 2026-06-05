@@ -2007,6 +2007,9 @@ impl<'s> ResharpParser<'s> {
                     if !c.negated && is_universal_perl_pair(item) {
                         return Ok(NodeId::TOP);
                     }
+                    if let regex_syntax::ast::ClassSetItem::Perl(p) = item {
+                        return self.get_class(c.negated ^ p.negated, p.kind.clone(), tb);
+                    }
                     let kind = if self.global_ascii_perl {
                         rewrite_ascii_perl_set(&c.kind)
                     } else {
@@ -2068,6 +2071,12 @@ impl<'s> ResharpParser<'s> {
                     }
                     ast::LookaroundKind::PositiveLookahead => {
                         Ok(tb.mk_lookahead(body, NodeId::MISSING, 0))
+                    }
+                    ast::LookaroundKind::PositiveLookbehind
+                    | ast::LookaroundKind::NegativeLookbehind
+                        if body.contains_lookahead(tb) =>
+                    {
+                        Err(self.error(g.span, ast::ErrorKind::UnsupportedResharpRegex))
                     }
                     ast::LookaroundKind::PositiveLookbehind => {
                         Ok(tb.mk_lookbehind(body, NodeId::MISSING))

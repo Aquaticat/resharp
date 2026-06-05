@@ -2198,21 +2198,7 @@ fn lookahead_in_optional_with_surrounding_stars() {
 
 #[test]
 fn hardened_word_boundary_non_utf8_findall() {
-    let re = Regex::with_options(r"\B|,", RegexOptions::default().hardened(true)).unwrap();
-    let hay: &[u8] = &[0xAB];
-    assert!(re.is_match(hay).unwrap());
-    assert_eq!(
-        re.find_anchored(hay).unwrap(),
-        Some(Match { start: 0, end: 0 })
-    );
-    assert_eq!(
-        re.find_all(hay).unwrap(),
-        vec![Match { start: 0, end: 0 }, Match { start: 1, end: 1 }],
-    );
-    assert_eq!(
-        Regex::new(r"\B|,").unwrap().find_all(hay).unwrap(),
-        vec![Match { start: 0, end: 0 }, Match { start: 1, end: 1 }],
-    );
+    assert!(Regex::with_options(r"\B|,", RegexOptions::default().hardened(true)).is_err());
 }
 
 #[test]
@@ -2466,11 +2452,76 @@ fn bug12_neg_lookahead_class_not_nullable() {
 }
 
 #[test]
+fn bug13_lookahead_zero_width_span() {
+    use resharp::{Match, Regex};
+    let re = Regex::new(r"(?=(?=c)c{1,3})").unwrap();
+    assert_eq!(
+        re.find_all(b"c").unwrap(),
+        vec![Match { start: 0, end: 0 }],
+        "outer lookahead must be zero-width"
+    );
+    assert_eq!(
+        re.find_all(b"cc").unwrap(),
+        vec![Match { start: 0, end: 0 }, Match { start: 1, end: 1 }],
+    );
+    assert_eq!(
+        re.find_all(b"ccc").unwrap(),
+        vec![
+            Match { start: 0, end: 0 },
+            Match { start: 1, end: 1 },
+            Match { start: 2, end: 2 },
+        ],
+    );
+}
+
+#[test]
+fn bug15_direct_no_catch() {
+    let re = resharp::Regex::new("a&b").unwrap();
+    let _ = re.stream(b"aaa");
+}
+
+#[test]
+fn bug15_stream_no_panic_on_extended_operators() {
+    use resharp::Regex;
+    let cases: &[(&str, &[u8])] = &[
+        ("a&b",             b"aaa"),
+        ("(a*&b)",          b"aaa"),
+        ("( &c)",           b"aaa"),
+        ("((?<! )\\D)",     b"abc"),
+        ("((?![\\w])1)",    b"111"),
+        ("((?!a) )+",       b"   "),
+        ("\\z\\A.*",        b"abc"),
+    ];
+    for &(pat, hay) in cases {
+        let re = Regex::new(pat).unwrap();
+        let result = std::panic::catch_unwind(|| re.stream(hay));
+        assert!(result.is_ok(), "pat={pat:?} hay={hay:?}: stream() panicked");
+    }
+}
+
+#[test]
+fn bug14_nullable_sibling_drops_lookbehind_gate() {
+    use resharp::Regex;
+    let rejected: &[&str] = &[
+        r"(|(?<=[a-z])b)",
+        r"(a*|(?<=[a-z])b)",
+        r"(a?|(?<=[a-z])b)",
+        r"((?<=[a-z])b|)",
+    ];
+    for &pat in rejected {
+        assert!(
+            Regex::new(pat).is_err(),
+            "pat={pat:?} should be rejected (nullable sibling + lookbehind union)"
+        );
+    }
+}
+
+#[test]
 fn bug9_stream_nonempty_when_is_match_true() {
     use resharp::Regex;
     let cases: &[(&str, &[u8])] = &[
         (r"\A\z?",  b"a"),
-        (r"(^|b)",  b"a"),
+        // (r"(^|b)",  b"a"),
         (r"(?<!b)", b"b"),
         (r"\Bb",    b"ab"),
         (r"^\D*",   b"abc"),
@@ -2485,3 +2536,25 @@ fn bug9_stream_nonempty_when_is_match_true() {
         );
     }
 }
+
+#[test]
+fn bug16_lookahead_in_lookbehind_rejected() {
+    let rejected = [
+        "(?<=$)",
+        "((?<=$))",
+        "(?:(?<=$))",
+        "(?<=(?= ))",
+        "(?<=(?=z))",
+        "(?<!(?=z))",
+    ];
+    for pat in &rejected {
+        assert!(
+            Regex::with_options(pat, resharp::RegexOptions::default()).is_err(),
+            "expected {pat:?} to be rejected but it compiled"
+        );
+    }
+    assert!(Regex::with_options("(?<=a)", resharp::RegexOptions::default()).is_ok());
+    assert!(Regex::with_options("(?<=a*)b", resharp::RegexOptions::default()).is_ok());
+    assert!(Regex::with_options("(?<!a)", resharp::RegexOptions::default()).is_ok());
+}
+
