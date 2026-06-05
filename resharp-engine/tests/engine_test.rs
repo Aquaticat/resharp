@@ -2229,12 +2229,9 @@ fn hardened_bare_lookahead_zero_width_dot_hash() {
 }
 
 #[test]
-fn inter_zero_min_len_union_anchor_no_overflow() {
+fn convergence() {
+    assert!(Regex::new(".*(.+)*.+").is_ok());
     assert!(Regex::new(r"a*&(b|^)").is_ok());
-}
-
-#[test]
-fn inter_nested_anchored_alternation_no_overflow() {
     assert!(Regex::new(r"(?iu)(?:@2222&(?:(?:(?:(?:(?:i22|222)|(?:222|^))|caf\u{e9})|caf\u{e9})|caf\u{e9}))").is_ok());
 }
 

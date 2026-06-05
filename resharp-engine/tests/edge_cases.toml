@@ -329,3 +329,21 @@ name = "bounded_rep_uuid"
 pattern = '\w{8}-\w{4}-\w{4}-\w{4}-\w{12}'
 input = "xxxxx00000000-0000-0000-0000-000000000000yyyyy"
 matches = [[5, 41]]
+
+[[test]]
+name = "compl_end_anchor_star_short"
+pattern = '~(_*\z)'
+input = "ab"
+matches = [[0, 1], [1, 1]]
+
+[[test]]
+name = "compl_end_anchor_star_longer"
+pattern = '~(_*\z)'
+input = "abc"
+matches = [[0, 2], [2, 2]]
+
+[[test]]
+name = "compl_dollar_star_non_multiline"
+pattern = '(?-m)~(_*$)'
+input = "ab"
+matches = [[0, 1], [1, 1]]

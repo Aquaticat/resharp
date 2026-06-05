@@ -197,8 +197,10 @@ impl NullsBuilder {
         let all = self.get_set_ref(set1) | self.get_set_ref(set2);
         let mut result: BTreeSet<&NullState> = BTreeSet::new();
         for m in all.iter().rev() {
-            let found = result.iter().find(|v| v.mask == m.mask && v.rel == m.rel);
-            if found.is_none() {
+            let dominated = result
+                .iter()
+                .any(|v| v.rel == m.rel && (v.mask.0 & m.mask.0) == m.mask.0);
+            if !dominated {
                 result.insert(m);
             }
         }

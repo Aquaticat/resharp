@@ -142,7 +142,7 @@ rev_nulls = [12, 11, 10, 9, 8, 7, 6]
 # made find_all emit the zero-width span (2, 2) twice).
 [[test]]
 name = "neg_lookahead_begin_anchor_no_duplicate_nulls"
-pattern = '(?!\A)'
+pattern = '(&~(\A))'
 input = "abc"
 rev_nulls = [2, 1]
 
