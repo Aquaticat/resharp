@@ -300,7 +300,25 @@ fn fas_apply(
         } else {
             None
         };
-        new_regs[idx].merge_from(&mut regs[slot], candidate_end, linker);
+        if (code & FAS_LOW_BIT) != 0 {
+            if let Some(ce) = candidate_end {
+                regs[slot].extend_e(ce);
+            }
+            let loser_head = regs[slot].head;
+            let loser_tail = regs[slot].tail;
+            regs[slot].drain_to_max(linker, max);
+            if loser_head != SLOT_NIL {
+                if new_regs[idx].is_empty() {
+                    new_regs[idx].head = loser_head;
+                    new_regs[idx].tail = loser_tail;
+                } else {
+                    linker[new_regs[idx].tail as usize] = loser_head;
+                    new_regs[idx].tail = loser_tail;
+                }
+            }
+        } else {
+            new_regs[idx].merge_from(&mut regs[slot], candidate_end, linker);
+        }
     }
     if spawn_allowed {
         match act.spawn {

@@ -179,3 +179,8 @@ name = 'sub_union'
 pattern = '.*|.*(.+)*.+'
 pp = '.*'
 
+[[test]]
+name = 'bug10_lb_start_compl'
+pattern = '(?<=^)~(0+)'
+pp = '(?<=_*(\A|\n))~(0+)'
+

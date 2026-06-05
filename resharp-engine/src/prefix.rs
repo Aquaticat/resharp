@@ -993,6 +993,8 @@ fn try_build_fwd_lb(
     node: NodeId,
 ) -> Result<Option<crate::accel::FwdPrefixSearch>, Error> {
     use resharp_algebra::Kind;
+    #[cfg(feature = "debug")]
+    eprintln!("  [try_build_fwd_lb] node={:?}", b.pp(node));
     let body = strip_leading_lookbehind(b, node);
     if body == node || node.right(b) != body {
         return Ok(None);
@@ -1011,7 +1013,12 @@ fn try_build_fwd_lb(
         }
         lb_stripped = after;
     }
-    if !matches!(b.get_fixed_length(lb_stripped), Some(1..=64)) {
+    #[cfg(feature = "debug")]
+    eprintln!("  [try_build_fwd_lb] after strip loop: lb_stripped={:?}", b.pp(lb_stripped));
+    let fixed_len = b.get_fixed_length(lb_stripped);
+    #[cfg(feature = "debug")]
+    eprintln!("  [try_build_fwd_lb] fixed_len={:?}", fixed_len);
+    if !matches!(fixed_len, Some(1..=64)) {
         return Ok(None);
     }
     if body_absorbs_lb(b, body, lb_stripped)? {
@@ -1020,7 +1027,12 @@ fn try_build_fwd_lb(
         return Ok(None);
     }
     let lb_body = b.mk_concat(lb_stripped, body);
-    build_fwd_prefix(b, lb_body)
+    #[cfg(feature = "debug")]
+    eprintln!("  [try_build_fwd_lb] lb_stripped={:?}, body={:?}, lb_body={:?}", b.pp(lb_stripped), b.pp(body), b.pp(lb_body));
+    let result = build_fwd_prefix(b, lb_body);
+    #[cfg(feature = "debug")]
+    eprintln!("  [try_build_fwd_lb] result={:?}", result.as_ref().map(|_| "Some"));
+    result
 }
 
 fn body_absorbs_lb(b: &mut RegexBuilder, body: NodeId, lb: NodeId) -> Result<bool, crate::Error> {

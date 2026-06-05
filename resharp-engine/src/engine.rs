@@ -395,7 +395,7 @@ impl LDFA {
         minterm_idx: u32,
     ) -> Result<u16, Error> {
         let delta = self.dfa_delta(state_id, minterm_idx);
-        if delta < self.center_table.len() && self.center_table[delta] != DFA_MISSING {
+        if self.center_table[delta] != DFA_MISSING {
             return Ok(self.center_table[delta]);
         }
         self.lazy_transition_slow(b, state_id, minterm_idx)
@@ -1344,7 +1344,7 @@ impl LDFA {
         {
             let node = self.state_nodes[DFA_INITIAL as usize];
             let eid = self.effects_id[DFA_INITIAL as usize];
-            eprintln!("[rev0] eid={eid} node={}", b.pp(node));
+            eprintln!("[rev0] eid={eid} node={:.80}", b.pp(node));
         }
 
         let mut curr = self.begin_table[self.mt_lookup[data[start_pos] as usize] as usize] as u32;
@@ -1365,7 +1365,7 @@ impl LDFA {
             let node = self.state_nodes[curr as usize];
             let eid = self.effects_id[curr as usize];
             eprintln!(
-                "[rev pos={start_pos}] state={curr} eid={eid} node={} nulls={nulls:?}",
+                "[rev pos={start_pos}] state={curr} eid={eid} node={:.80} nulls={nulls:?}",
                 b.pp(node)
             );
         }
@@ -1499,13 +1499,19 @@ impl LDFA {
         nulls: &mut Vec<usize>,
     ) -> Result<(), Error> {
         let mt = self.mt_lookup[data[0] as usize] as u32;
+        #[cfg(feature = "debug")]
+        {
+            let delta = self.dfa_delta(sid, mt);
+            let cached = if delta < self.center_table.len() { self.center_table[delta] } else { DFA_MISSING };
+            eprintln!("[handle_rev_end] sid={sid} mt={mt} delta={delta} center_cached={cached}");
+        }
         let new_state = self.lazy_transition(b, sid, mt)?;
         #[cfg(feature = "debug")]
         {
             let node = self.state_nodes[sid as usize];
             let eid = self.effects_id[sid as usize];
             eprintln!(
-                "[pre end] state={new_state} eid={eid} node={} nulls={nulls:?}",
+                "[pre end] sid={sid} new_state={new_state} eid={eid} node={:.80} nulls={nulls:?}",
                 b.pp(node)
             );
         }
@@ -1514,7 +1520,7 @@ impl LDFA {
             let node = self.state_nodes[new_state as usize];
             let eid = self.effects_id[new_state as usize];
             eprintln!(
-                "[rev end] state={new_state} eid={eid} node={} nulls={nulls:?}",
+                "[rev end] state={new_state} eid={eid} node={:.80} nulls={nulls:?}",
                 b.pp(node)
             );
         }
@@ -1766,10 +1772,9 @@ fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool, const INITIAL_SKIP: boo
                                         nulls,
                                     );
                                 }
-                                // not necessary
-                                // if skip_pos == 0 {
-                                //     continue;
-                                // }
+                                if skip_pos == 0 {
+                                    continue;
+                                }
                             }
                         }
                         None => {

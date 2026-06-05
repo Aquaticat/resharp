@@ -1082,7 +1082,7 @@ impl Regex {
             };
 
         // lots of conditions when something else is better.. possibly removing it entirely
-        let use_bounded = !has_fwd_prefix
+        let use_bounded = false && !has_fwd_prefix
             && max_length.is_some()
             && max_len <= 100
             && !b.contains_lookbehind(node)
@@ -1258,17 +1258,8 @@ impl Regex {
             };
         }
 
-        // todo: `Y·_*` shape: single match into _*
-        // let has_fwd_prefix = matches!(
-        //     &self.prefix,
-        //     Some(prefix::PrefixKind::AnchoredFwd(_) | prefix::PrefixKind::AnchoredFwdLb(_))
-        // );
-        // if self.trailing_star_anchored_left && !has_fwd_prefix {
-        //     return self.find_all_trailing_star(input);
-        // }
-
         #[cfg(all(feature = "debug", debug_assertions))]
-        eprintln!("[algorithm] {:?}", self.find_all);
+        eprintln!("[algorithm] {:?} input={:?}", self.find_all, input);
 
         match self.find_all {
             FindAll::EmptyLang => Ok(vec![]),
@@ -1860,42 +1851,28 @@ impl Regex {
     ///
     /// faster than `find_all` when you only need a yes/no answer.
     pub fn is_match(&self, input: &[u8]) -> Result<bool, Error> {
-        if self.is_empty_lang {
-            return Ok(false);
-        }
         if input.is_empty() {
-            return Ok(self.empty_nullable);
+            #[cfg(feature = "debug")]
+            eprintln!("[is_match] path=empty_input empty_nullable={}", self.empty_nullable);
+            return Ok(self.empty_nullable && !self.is_empty_lang);
         }
-        if self.fwd_begin_anchored {
-            return Ok(self.find_anchored(input)?.is_some());
+        #[cfg(all(feature = "debug", debug_assertions))]
+        eprintln!("[is_match] path={:?}", self.find_all);
+        match self.find_all {
+            FindAll::EmptyLang => Ok(false),
+            FindAll::Anchored => Ok(self.find_anchored(input)?.is_some()),
+            FindAll::Hardened | FindAll::Dfa => Ok(!self.find_all_dfa(input)?.is_empty()),
+            FindAll::Bounded => self.is_match_fwd_bounded(input),
+            FindAll::FwdPrefix => match &self.prefix {
+                Some(prefix::PrefixKind::AnchoredFwd(fp)) => self.is_match_fwd_prefix(fp, input),
+                _ => unreachable!("FwdPrefix without AnchoredFwd prefix"),
+            },
+            FindAll::FwdLbPrefix => match &self.prefix {
+                Some(prefix::PrefixKind::AnchoredFwdLb(fp)) => {
+                    self.is_match_fwd_lb_prefix(fp, input)
+                }
+                _ => unreachable!("FwdLbPrefix without AnchoredFwdLb prefix"),
+            },
         }
-        if self.rev_end_anchored {
-            let inner = &mut *self.inner.lock().unwrap();
-            let start = inner
-                .rev_ts
-                .scan_rev_from(&mut inner.b, input.len(), 0, input)?;
-            return Ok(start != engine::NO_MATCH);
-        }
-        if self.has_bounded {
-            return self.is_match_fwd_bounded(input);
-        }
-        match &self.prefix {
-            Some(prefix::PrefixKind::AnchoredFwdLb(fp)) => {
-                return self.is_match_fwd_lb_prefix(fp, input)
-            }
-            Some(prefix::PrefixKind::AnchoredFwd(fp)) => {
-                return self.is_match_fwd_prefix(fp, input)
-            }
-            _ => {}
-        }
-        let inner = &mut *self.inner.lock().unwrap();
-        if inner.rev_ts.effects_id[engine::DFA_INITIAL as usize] != 0 {
-            return Ok(true);
-        }
-        inner.nulls.clear();
-        inner
-            .rev_ts
-            .collect_rev_first(&mut inner.b, input.len() - 1, input, &mut inner.nulls)?;
-        Ok(!inner.nulls.is_empty())
     }
 }

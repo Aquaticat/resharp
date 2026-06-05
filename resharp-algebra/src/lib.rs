@@ -3630,6 +3630,9 @@ impl RegexBuilder {
         if left == NodeId::TS {
             return self.init_as(key, left);
         }
+        if left == NodeId::EPS && right == NodeId::END {
+            return self.init_as(key, NodeId::EPS);
+        }
         // \A | (?<=R) ==>  (?<=\A|R)
         if left == NodeId::BEGIN && self.get_kind(right) == Kind::Lookbehind {
             let lb_body = self.get_lookbehind_inner(right);
@@ -3761,11 +3764,14 @@ impl RegexBuilder {
         if let Some(id) = self.key_is_created(&key) {
             return *id;
         }
+        if body_id.is_begin() || body_id.is_end() {
+            return NodeId::EPS;
+        }
         // _*{500} is still _*
-        if body_id.is_kind(self, Kind::Star) {
+        if body_id.is_star(self) {
             return body_id;
         }
-        // (P+)* = P* since (P·P*)* = P*
+        // (P+)* = P*
         if body_id.is_plus(self) {
             return body_id.right(self);
         }

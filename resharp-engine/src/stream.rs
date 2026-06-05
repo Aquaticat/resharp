@@ -265,6 +265,26 @@ fn stream_general<const REV: bool, const STOP: bool, F: FnMut(usize, usize)>(
     mut emit: F,
 ) -> Result<(), Error> {
     let end = input.len();
+    let mut last_match_end = 0usize;
+
+    // begin step
+    if inner.fwd_ts.initial_nullability.has(Nullability::BEGIN) {
+        emit(0, 0);
+        if STOP {
+            return Ok(());
+        }
+        stream_feed_loop::<REV, true, STOP, _>(
+            inner,
+            fwd_prefix,
+            input,
+            1,
+            engine::DFA_INITIAL as u32,
+            &mut last_match_end,
+            &mut emit,
+        )?;
+        return Ok(());
+    }
+
     let mt0 = inner.fwd_ts.mt_lookup[input[0] as usize] as u32;
     let first = inner.fwd_ts.begin_table[mt0 as usize] as u32;
     let pos = 1usize;
@@ -273,7 +293,6 @@ fn stream_general<const REV: bool, const STOP: bool, F: FnMut(usize, usize)>(
     } else {
         Nullability::END
     };
-    let mut last_match_end = 0usize;
     let emitted = try_emit_step::<REV, _>(
         inner,
         input,

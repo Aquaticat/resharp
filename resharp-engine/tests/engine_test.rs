@@ -2236,6 +2236,175 @@ fn convergence() {
 }
 
 #[test]
+fn bug3_is_match_vs_find_all_z_lookahead() {
+    let re = Regex::new(r"(\z|(?=a)\w)").unwrap();
+    let hay = b"0";
+    let fa = re.find_all(hay).unwrap();
+    let im = re.is_match(hay).unwrap();
+    assert_eq!(im, !fa.is_empty(),
+        "is_match={im} find_all.len()={} disagree on '0'", fa.len());
+}
+
+#[test]
+fn bug21_Bb_not_idempotent() {
+    let re = Regex::new(r"\Bb").unwrap();
+    let r1 = re.is_match(b"ba").unwrap();
+    let r2 = re.is_match(b"ba").unwrap();
+    assert_eq!(r1, r2, "is_match(ba) not idempotent: first={r1} second={r2}");
+    assert!(!r1, "\\Bb on 'ba' must be false (no non-word-boundary before b)");
+}
+
+#[test]
+fn bug3_is_match_vs_find_all_bu() {
+    // let re = Regex::new(r"\BU").unwrap();
+    let re = Regex::new(r"\BU").unwrap();
+    let hay = b"Ui";
+    println!("{:?}","CALL 1");
+    let fa1 = re.find_all(hay).unwrap();
+    println!("{:?}","CALL 2");
+    let fa2 = re.find_all(hay).unwrap();
+    assert_eq!(fa1, fa2, "find_all not idempotent: first={fa1:?} second={fa2:?}");
+    let im = re.is_match(hay).unwrap();
+    assert_eq!(im, !fa1.is_empty(),
+        "is_match={im} find_all.len()={} disagree on 'Uii\\\\'", fa1.len());
+}
+
+#[test]
+fn bug3_is_match_vs_find_all_z_a_empty() {
+    let re = Regex::new(r"\z\A(?:a){0,1}").unwrap();
+    let hay = b"";
+    let fa = re.find_all(hay).unwrap();
+    let im = re.is_match(hay).unwrap();
+    assert_eq!(im, !fa.is_empty(),
+        "is_match={im} find_all.len()={} disagree on empty input", fa.len());
+}
+
+#[test]
+fn bug3_is_match_vs_find_all_lookbehind() {
+    let re = Regex::new(r"(?<=\D?[a-c]+0?)b").unwrap();
+    let hay = b"ba";
+    let fa = re.find_all(hay).unwrap();
+    let im = re.is_match(hay).unwrap();
+    assert_eq!(im, !fa.is_empty(),
+        "is_match={im} find_all.len()={} disagree on 'ba'", fa.len());
+}
+
+#[test]
+fn bug2_rev_fwd_disagreement_no_panic() {
+    // BUG-2: forward scan from reverse-proposed start returns NO_MATCH.
+    // Was assert_ne! at engine.rs:960; must not panic, must return no match.
+    let re = resharp::Regex::new(r".\W*b+").unwrap();
+    assert_eq!(re.find_all(b"ba").unwrap(), vec![] as Vec<resharp::Match>);
+
+    let re2 = resharp::Regex::new(r"\S+b").unwrap();
+    assert_eq!(re2.find_all(b"b_").unwrap(), vec![] as Vec<resharp::Match>);
+}
+
+#[test]
+fn bug4_no_match_sentinel_not_leaked_as_match_end() {
+    // BUG-4: push sites emitted Match { end: usize::MAX } when forward scan
+    // found no end for a reverse-proposed start. Every returned Match must
+    // satisfy start <= end <= haystack.len().
+    let check = |ms: Vec<resharp::Match>, hay: &[u8]| {
+        for m in &ms {
+            assert!(
+                m.end <= hay.len(),
+                "end={} > hay.len()={}: Match {{ start: {}, end: {} }}",
+                m.end, hay.len(), m.start, m.end
+            );
+        }
+    };
+
+    // end-anchor complement, flags mode
+    let mk_flags = || {
+        resharp::RegexOptions::default()
+            .case_insensitive(true)
+            .ignore_whitespace(true)
+            .dot_matches_new_line(true)
+            .multiline(false)
+    };
+
+    let re = resharp::Regex::with_options(r"~(_*$)", mk_flags()).unwrap();
+    check(re.find_all(b"ab").unwrap(), b"ab");
+    check(re.find_all(b"abc").unwrap(), b"abc");
+
+    let re2 = resharp::Regex::with_options(r"~(_*\z)", mk_flags()).unwrap();
+    check(re2.find_all(b"ab").unwrap(), b"ab");
+    check(re2.find_all(b"abc").unwrap(), b"abc");
+
+    // non-word-boundary prefix, default mode
+    let re3 = resharp::Regex::new(r"\Bb+").unwrap();
+    check(re3.find_all(b"ba").unwrap(), b"ba");
+
+    // lookbehind prefix, default mode
+    let re4 = resharp::Regex::new(r"(?<=[^a])b+").unwrap();
+    check(re4.find_all(b"ba").unwrap(), b"ba");
+}
+
+#[test]
+fn bug7_negated_perl_classes_not_nullable_in_ascii_mode() {
+    // BUG-7: \D/\S/\W in ascii mode used mk_compl (language complement ~)
+    // instead of neg_class (byte-class negation), making them nullable.
+    // The empty string and every multi-byte string fell inside ~(\w) etc.
+    macro_rules! mk {
+        ($pat:expr) => {
+            resharp::Regex::with_options(
+                $pat,
+                resharp::RegexOptions::default().unicode(resharp::UnicodeMode::Ascii),
+            ).unwrap()
+        };
+    }
+
+    // bare shorthands must not match the empty string
+    assert!(!mk!(r"\D").is_match(b"").unwrap(), r"\D must not match empty");
+    assert!(!mk!(r"\S").is_match(b"").unwrap(), r"\S must not match empty");
+    assert!(!mk!(r"\W").is_match(b"").unwrap(), r"\W must not match empty");
+
+    // must not match a string containing only the positive class member
+    assert!(!mk!(r"\D").is_match(b"0").unwrap(), r"\D must not match '0'");
+    assert!(!mk!(r"\S").is_match(b" ").unwrap(), r"\S must not match ' '");
+    assert!(!mk!(r"\W").is_match(b"a").unwrap(), r"\W must not match 'a'");
+
+    // suffixed pattern: a*\D must not match "" or "0"
+    assert!(!mk!(r"a*\D").is_match(b"").unwrap(), r"a*\D must not match empty");
+    assert!(!mk!(r"a*\D").is_match(b"0").unwrap(), r"a*\D must not match '0'");
+
+    // bracketed forms must stay correct (they were never broken)
+    assert!(!mk!(r"[\D]").is_match(b"").unwrap(), r"[\D] must not match empty");
+    assert!(!mk!(r"[^\d]").is_match(b"").unwrap(), r"[^\d] must not match empty");
+
+    // positive classes must match the right bytes
+    assert!(mk!(r"\d").is_match(b"5").unwrap(), r"\d must match '5'");
+    assert!(mk!(r"\s").is_match(b" ").unwrap(), r"\s must match ' '");
+    assert!(mk!(r"\w").is_match(b"_").unwrap(), r"\w must match '_'");
+}
+
+#[test]
+fn bug8_default_and_hardened_find_all_agree() {
+    // BUG-8: default optimised path disagrees with hardened find_all_dfa.
+    // On "aaa", default gives [(0,1),(1,2),(2,3),(3,3)],
+    // hardened gives [(0,2),(2,3),(3,3)]. Default is correct (leftmost-longest).
+    let cases: &[(&str, &[u8])] = &[
+        (r"~(_a+)", b"aaa"),
+        (r"~(aa*a)", b"aaa"),
+        (r"a~(a+)", b"aaa"),
+    ];
+    for (pat, hay) in cases {
+        let def = resharp::Regex::new(pat).unwrap();
+        let hard = resharp::Regex::with_options(
+            pat,
+            resharp::RegexOptions::default().hardened(true),
+        ).unwrap();
+        let def_ms = def.find_all(hay).unwrap();
+        let hard_ms = hard.find_all(hay).unwrap();
+        assert_eq!(
+            def_ms, hard_ms,
+            "pat={pat:?} hay={hay:?}: default={def_ms:?} hardened={hard_ms:?}"
+        );
+    }
+}
+
+#[test]
 fn compile_wildcard_literal_wildcard_terminates() {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -2245,5 +2414,50 @@ fn compile_wildcard_literal_wildcard_terminates() {
     match rx.recv_timeout(std::time::Duration::from_secs(10)) {
         Ok(ok) => assert!(ok, "compile failed"),
         Err(_) => panic!("Regex::new hung on wildcard-literal-wildcard pattern"),
+    }
+}
+
+#[test]
+fn bug10_default_and_hardened_find_all_agree() {
+    // BUG-10: default optimised path drops a trailing zero-width match.
+    // Pattern: (?<=^)~(0+)
+    // This has a zero-width lookbehind (?<=^) and body ~ (0+) that can match zero bytes.
+    let cases: &[(&str, &[u8])] = &[
+        (r"(?<=^)~(0+)", b"\n"),
+        (r"(?<=^)~(0+)", b"0\n"),
+    ];
+    for (pat, hay) in cases {
+        let def = resharp::Regex::new(pat).unwrap();
+        let hard = resharp::Regex::with_options(
+            pat,
+            resharp::RegexOptions::default().hardened(true),
+        ).unwrap();
+        let def_ms = def.find_all(hay).unwrap();
+        let hard_ms = hard.find_all(hay).unwrap();
+        assert_eq!(
+            def_ms, hard_ms,
+            "pat={pat:?} hay={hay:?}: default={def_ms:?} hardened={hard_ms:?}"
+        );
+    }
+}
+
+#[test]
+fn bug9_stream_nonempty_when_is_match_true() {
+    use resharp::Regex;
+    let cases: &[(&str, &[u8])] = &[
+        (r"\A\z?",  b"a"),
+        (r"(^|b)",  b"a"),
+        (r"(?<!b)", b"b"),
+        (r"\Bb",    b"ab"),
+        (r"^\D*",   b"abc"),
+    ];
+    for &(pat, hay) in cases {
+        let re = Regex::new(pat).unwrap();
+        let im = re.is_match(hay).unwrap();
+        let sv = re.stream(hay).unwrap();
+        assert!(
+            !im || !sv.is_empty(),
+            "pat={pat:?} hay={hay:?}: is_match={im} but stream={sv:?}"
+        );
     }
 }
