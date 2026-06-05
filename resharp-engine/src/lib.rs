@@ -300,6 +300,7 @@ pub struct Regex {
     pub(crate) bounded_safe_find_all: bool,
     pub(crate) lb_check_bytes: u8,
     pub(crate) fwd_lb_begin_nullable: bool,
+    pub(crate) fwd_lb_body_nullable: bool,
     pub(crate) has_anchors: bool,
     pub(crate) find_all: FindAll,
     pub(crate) stream_cache: stream::StreamCache,
@@ -1059,7 +1060,7 @@ impl Regex {
             }
         };
 
-        let (fwd_lb_begin_nullable, lb_check_bytes) =
+        let (fwd_lb_begin_nullable, fwd_lb_body_nullable, lb_check_bytes) =
             if matches!(selected, Some(prefix::PrefixKind::AnchoredFwdLb(_))) {
                 let lb_inner = b.get_lookbehind_inner(node.left(&b));
                 let lb_nonbegin = b.nonbegins(lb_inner);
@@ -1076,9 +1077,10 @@ impl Regex {
                     .get_fixed_length(lb_stripped)
                     .expect("AnchoredFwdLb requires fixed-length lb");
                 let begin_nullable = b.nullability(lb_inner).has(Nullability::BEGIN);
-                (begin_nullable, lb_fixed as u8)
+                let body_nullable = b.nullability(fwd_start) != Nullability::NEVER;
+                (begin_nullable, body_nullable, lb_fixed as u8)
             } else {
-                (false, 0)
+                (false, false, 0)
             };
 
         // lots of conditions when something else is better.. possibly removing it entirely
@@ -1159,6 +1161,7 @@ impl Regex {
             bounded_safe_find_all,
             lb_check_bytes,
             fwd_lb_begin_nullable,
+            fwd_lb_body_nullable,
             has_anchors,
             stream_cache: Default::default(),
         })

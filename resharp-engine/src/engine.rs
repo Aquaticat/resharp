@@ -376,7 +376,7 @@ impl LDFA {
     }
 
     pub fn get_or_register(&mut self, b: &mut RegexBuilder, node: NodeId) -> u16 {
-        register_state(
+        let sid = register_state(
             &mut self.state_nodes,
             &mut self.node_to_state,
             &mut self.effects_id,
@@ -384,7 +384,9 @@ impl LDFA {
             &mut self.effects,
             b,
             node,
-        )
+        );
+        self.ensure_capacity(sid);
+        sid
     }
 
     #[inline(always)]

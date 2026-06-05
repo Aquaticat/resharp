@@ -64,11 +64,38 @@ fn fwd_prefix_impl<const IS_MATCH: bool>(
     Ok(false)
 }
 
+fn try_emit_zero_width<const IS_MATCH: bool>(
+    fwd: &mut engine::LDFA,
+    b: &mut RegexBuilder,
+    lb_len: usize,
+    fwd_prefix: &FwdPrefixSearch,
+    input: &[u8],
+    at: usize,
+    matches: &mut Vec<Match>,
+) -> Result<bool, Error> {
+    if at < lb_len {
+        return Ok(false);
+    }
+    let lb_pos = at - lb_len;
+    if fwd_prefix.find_fwd(input, lb_pos) != Some(lb_pos) {
+        return Ok(false);
+    }
+    let zw = fwd.scan_fwd_from(b, engine::DFA_INITIAL as u32, at, input)?;
+    if zw == at {
+        if IS_MATCH {
+            return Ok(true);
+        }
+        matches.push(Match { start: at, end: at });
+    }
+    Ok(false)
+}
+
 fn fwd_lb_prefix_impl<const IS_MATCH: bool>(
     fwd: &mut engine::LDFA,
     b: &mut RegexBuilder,
     lb_len: usize,
     fwd_lb_begin_nullable: bool,
+    body_nullable: bool,
     fwd_prefix: &FwdPrefixSearch,
     input: &[u8],
     matches: &mut Vec<Match>,
@@ -85,6 +112,11 @@ fn fwd_lb_prefix_impl<const IS_MATCH: bool>(
                 start: 0,
                 end: max_end,
             });
+            if max_end > 0 && body_nullable {
+                if try_emit_zero_width::<IS_MATCH>(fwd, b, lb_len, fwd_prefix, input, max_end, matches)? {
+                    return Ok(true);
+                }
+            }
             search_start = if max_end == 0 { 1 } else { max_end };
         }
     }
@@ -105,6 +137,11 @@ fn fwd_lb_prefix_impl<const IS_MATCH: bool>(
                 start: body_start,
                 end: max_end,
             });
+            if max_end > body_start && body_nullable {
+                if try_emit_zero_width::<IS_MATCH>(fwd, b, lb_len, fwd_prefix, input, max_end, matches)? {
+                    return Ok(true);
+                }
+            }
             search_start = max_end;
         } else {
             search_start = body_start;
@@ -164,6 +201,7 @@ impl Regex {
             &mut inner.b,
             self.lb_check_bytes as usize,
             self.fwd_lb_begin_nullable,
+            self.fwd_lb_body_nullable,
             fwd_prefix,
             input,
             &mut inner.matches,
@@ -182,6 +220,7 @@ impl Regex {
             &mut inner.b,
             self.lb_check_bytes as usize,
             self.fwd_lb_begin_nullable,
+            self.fwd_lb_body_nullable,
             fwd_prefix,
             input,
             &mut inner.matches,

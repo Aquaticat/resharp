@@ -1071,20 +1071,11 @@ impl RegexBuilder {
                 (lmin.max(rmin), lmax.min(rmax))
             }
             Kind::Lookahead => {
-                let body = node_id.left(self);
-                if self.is_infinite(body) {
-                    return (0, u32::MAX);
-                }
-                let right = node_id.right(self);
-                if right.is_missing() {
-                    (0, 0)
-                } else {
-                    self.get_min_max_length(right)
-                }
+                self.get_min_max_length(node_id.right(self).missing_to_eps())
             }
             Kind::Counted => self.get_min_max_length(node_id.left(self)),
             Kind::Star | Kind::Compl => (0, u32::MAX),
-            Kind::Lookbehind => (0, 0),
+            Kind::Lookbehind => self.get_min_max_length(node_id.right(self).missing_to_eps()),
         }
     }
 
@@ -3798,7 +3789,15 @@ impl RegexBuilder {
             }
             Kind::Compl => self.nullability_emptystring(node_id.left(self)).not(),
             Kind::Lookbehind => self.nullability_emptystring(node_id.left(self)),
-            Kind::Lookahead => self.nullability_emptystring(node_id.left(self)),
+            Kind::Lookahead => {
+                let body_null = self.nullability_emptystring(node_id.left(self));
+                let la_tail = self.get_lookahead_tail(node_id);
+                if la_tail == NodeId::MISSING {
+                    body_null
+                } else {
+                    body_null.and(self.nullability_emptystring(la_tail))
+                }
+            }
             Kind::Counted => self.nullability_emptystring(node_id.left(self)),
         }
     }

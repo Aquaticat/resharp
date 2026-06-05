@@ -2442,6 +2442,30 @@ fn bug10_default_and_hardened_find_all_agree() {
 }
 
 #[test]
+fn bug12_neg_lookahead_class_not_nullable() {
+    use resharp::Regex;
+    let cases: &[&str] = &[
+        r"(?!\w)0+",
+        r"(?!~(b{0}))[a-z]",
+        r"(?!\D)()*\D{2,2}",
+        r"(?!\D)(1&[a-c]+)",
+        r"(?!\w)0+.{0,2}",
+    ];
+    for &pat in cases {
+        let re = Regex::new(pat).unwrap();
+        assert!(
+            !re.is_match(b"").unwrap(),
+            "pat={pat:?}: expected is_match(\"\")=false, got true"
+        );
+        let ms = re.find_all(b"").unwrap();
+        assert!(
+            ms.is_empty(),
+            "pat={pat:?}: expected find_all(\"\")=[], got {ms:?}"
+        );
+    }
+}
+
+#[test]
 fn bug9_stream_nonempty_when_is_match_true() {
     use resharp::Regex;
     let cases: &[(&str, &[u8])] = &[
