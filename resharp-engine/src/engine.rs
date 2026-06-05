@@ -1560,9 +1560,24 @@ fn collect_nulls(
                 }
             }
             _ => {
+                // A position is a single find_all start candidate. One node can
+                // carry several null-effect entries that resolve to the same
+                // position (e.g. `EPS & ~body` from a zero-width negative
+                // lookahead such as `(?!\A)`, whose intersection keeps a nullable
+                // entry from each operand at rel 0). Register each resolved
+                // position from this node's effect set once so find_all does not
+                // emit a duplicate zero-width span. De-duplication is scoped to
+                // this effect list (`start..`): that is where the duplicate
+                // arises, since each position is processed by one collect_nulls
+                // call, so cross-call collisions do not occur. The effect set per
+                // state is tiny, so the linear scan is cheap.
+                let start = nulls.len();
                 for n in &effects[eid as usize] {
                     if n.mask.has(mask) {
-                        nulls.push(pos + n.rel as usize);
+                        let resolved = pos + n.rel as usize;
+                        if !nulls[start..].contains(&resolved) {
+                            nulls.push(resolved);
+                        }
                     }
                 }
             }
