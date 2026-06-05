@@ -261,3 +261,207 @@ pattern = 'P.*X|Q.*Y'
 input = "P_Y"
 matches = []
 
+[[test]]
+name = "ci_literal"
+pattern = '(?i)abc'
+input = "xAbCx"
+matches = [[1, 4]]
+
+[[test]]
+name = "ci_literal_no_match"
+pattern = '(?i)abc'
+input = "xyz"
+matches = []
+
+[[test]]
+name = "ci_alternation"
+pattern = '(?i)(foo|bar)'
+input = "FOO and Bar and bAr"
+matches = [[0, 3], [8, 11], [16, 19]]
+
+[[test]]
+name = "ci_class_range"
+pattern = '(?i)[a-f]+'
+input = "xABCDEFx"
+matches = [[1, 7]]
+
+[[test]]
+name = "ci_quantifier"
+pattern = '(?i)a+'
+input = "aAaA"
+matches = [[0, 4]]
+
+[[test]]
+name = "ci_bounded_repeat"
+pattern = '(?i)ab{2,4}'
+input = "aBBBx"
+matches = [[0, 4]]
+
+[[test]]
+name = "ci_dotstar"
+pattern = '(?i)a.*z'
+input = "AbcZ"
+matches = [[0, 4]]
+
+[[test]]
+name = "ci_mixed_case_literal"
+pattern = '(?i)HeLLo'
+input = "hello HELLO HeLLo hElLo"
+matches = [[0, 5], [6, 11], [12, 17], [18, 23]]
+
+[[test]]
+name = "ci_word_boundary"
+pattern = '(?i)\bhello\b'
+input = "Hello HELLO hello"
+matches = [[0, 5], [6, 11], [12, 17]]
+
+[[test]]
+name = "ci_digits_unaffected"
+pattern = '(?i)test123'
+input = "TEST123 test123 TeSt123"
+matches = [[0, 7], [8, 15], [16, 23]]
+
+[[test]]
+name = "ci_char_class_explicit"
+pattern = '(?i)[xyz]+'
+input = "XyZxYz"
+matches = [[0, 6]]
+
+[[test]]
+name = "ci_negated_class"
+pattern = '(?i)[^a-c]+'
+input = "xABCxDEFx"
+matches = [[0, 1], [4, 9]]
+
+[[test]]
+name = "ci_anchored_start"
+pattern = '(?i)^hello'
+input = "Hello world"
+matches = [[0, 5]]
+
+[[test]]
+name = "ci_anchored_end"
+pattern = '(?i)world$'
+input = "hello WORLD"
+matches = [[6, 11]]
+
+[[test]]
+name = "ci_anchored_full"
+pattern = '(?i)^hello world$'
+input = "HELLO WORLD"
+matches = [[0, 11]]
+
+[[test]]
+name = "ci_anchored_no_match"
+pattern = '(?i)^hello$'
+input = "xhellox"
+matches = []
+
+[[test]]
+name = "ci_optional"
+pattern = '(?i)colou?r'
+input = "Color COLOUR color colour"
+matches = [[0, 5], [6, 12], [13, 18], [19, 25]]
+
+[[test]]
+name = "ci_plus_quantifier"
+pattern = '(?i)z+'
+input = "zZzZZz"
+matches = [[0, 6]]
+
+[[test]]
+name = "ci_star_quantifier"
+pattern = '(?i)ab*c'
+input = "AC ABC ABBC ac abc"
+matches = [[0, 2], [3, 6], [7, 11], [12, 14], [15, 18]]
+
+[[test]]
+name = "ci_escape_sequence"
+pattern = '(?i)\d+[a-f]+'
+input = "123ABC 456def 789aF"
+matches = [[0, 6], [7, 13], [14, 19]]
+
+[[test]]
+name = "ci_lookahead"
+pattern = '(?i)foo(?=bar)'
+input = "FOOBAR foobar FoObAr foobaz"
+matches = [[0, 3], [7, 10], [14, 17]]
+
+[[test]]
+name = "ci_lookbehind"
+pattern = '(?i)(?<=foo)bar'
+input = "FOOBAR foobar FoObAr bazbar"
+matches = [[3, 6], [10, 13], [17, 20]]
+
+[[test]]
+name = "ci_empty_input"
+pattern = '(?i)abc'
+input = ""
+matches = []
+
+[[test]]
+name = "ci_single_char"
+pattern = '(?i)a'
+input = "AaAa"
+matches = [[0, 1], [1, 2], [2, 3], [3, 4]]
+
+[[test]]
+name = "ci_unicode_ascii"
+pattern = '(?i)caf'
+input = "CAF caf Caf"
+matches = [[0, 3], [4, 7], [8, 11]]
+
+[[test]]
+name = "ci_pipe_in_group"
+pattern = '(?i)(cat|dog|bird)'
+input = "CAT Dog BIRD cat"
+matches = [[0, 3], [4, 7], [8, 12], [13, 16]]
+
+[[test]]
+name = "ci_nested_groups"
+pattern = '(?i)(a(bc)d)'
+input = "ABCD abcd AbCd"
+matches = [[0, 4], [5, 9], [10, 14]]
+
+[[test]]
+name = "ci_exact_repeat"
+pattern = '(?i)a{3}'
+input = "aAa AAA aaa"
+matches = [[0, 3], [4, 7], [8, 11]]
+
+[[test]]
+name = "ci_range_repeat"
+pattern = '(?i)x{2,4}'
+input = "xX XXx xXxX"
+matches = [[0, 2], [3, 6], [7, 11]]
+
+[[test]]
+name = "ci_scoped"
+pattern = '(?i:abc)def'
+input = "ABCdef abcDEF ABCDef abcdef"
+matches = [[0, 6], [21, 27]]
+
+[[test]]
+name = "ci_scoped_no_leak"
+pattern = '(?i:abc)def'
+input = "ABCDEF"
+matches = []
+
+[[test]]
+name = "ci_scoped_alternation"
+pattern = '(?i:foo|bar)baz'
+input = "FOObaz BARbaz foobaz FOOBAZ"
+matches = [[0, 6], [7, 13], [14, 20]]
+
+[[test]]
+name = "ci_scoped_class"
+pattern = '(?i:[a-f])+g'
+input = "ABCDEFg abcdefg ABCDEfG"
+matches = [[0, 7], [8, 15]]
+
+[[test]]
+name = "ci_scoped_nested"
+pattern = '(?i:a(?-i:b)c)'
+input = "AbC ABC abc aBc"
+matches = [[0, 3], [8, 11]]
+

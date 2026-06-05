@@ -669,6 +669,12 @@ input = "a"
 matches = [[0,0]]
 
 [[test]]
+name = "word_boundary_inference"
+pattern = '<.*(?<=<)bg'
+input = "<bg"
+matches = [[0, 3]]
+
+[[test]]
 name = "nullable_lb_union_word_boundary_comma"
 pattern = '\B|,'
 expect_error = true

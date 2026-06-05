@@ -102,6 +102,8 @@ pub enum Error {
     PatternTooLarge,
     /// serialization or deserialization failure.
     Serialize(String),
+    /// internal invariant violated; indicates a bug in the engine.
+    InternalError(&'static str),
 }
 
 impl std::fmt::Display for Error {
@@ -112,6 +114,7 @@ impl std::fmt::Display for Error {
             Error::CapacityExceeded => write!(f, "DFA state capacity exceeded"),
             Error::PatternTooLarge => write!(f, "pattern too large"),
             Error::Serialize(ref s) => write!(f, "serialization error: {}", s),
+            Error::InternalError(msg) => write!(f, "internal error: {}", msg),
         }
     }
 }
@@ -124,6 +127,7 @@ impl std::error::Error for Error {
             Error::CapacityExceeded => None,
             Error::PatternTooLarge => None,
             Error::Serialize(_) => None,
+            Error::InternalError(_) => None,
         }
     }
 }
@@ -1085,10 +1089,10 @@ impl Regex {
                 }
                 let lb_fixed = b
                     .get_fixed_length(lb_stripped)
-                    .expect("AnchoredFwdLb requires fixed-length lb");
+                    .ok_or(Error::InternalError("AnchoredFwdLb requires fixed-length lb"))?;
                 let begin_nullable = b.nullability(lb_inner).has(Nullability::BEGIN);
                 let body_nullable = b.nullability(fwd_start) != Nullability::NEVER;
-                (begin_nullable, body_nullable, lb_fixed as u8)
+                (begin_nullable, body_nullable, u8::try_from(lb_fixed).map_err(|_| Error::InternalError("AnchoredFwdLb lb_fixed exceeds u8"))?)
             } else {
                 (false, false, 0)
             };
@@ -1132,6 +1136,7 @@ impl Regex {
             } else {
                 true
             };
+            let ksm = ksm || initial_nullability == Nullability::ALWAYS;
             Some(fas::FwdDFA::new(&fwd, ksm))
         } else {
             None
@@ -1289,13 +1294,13 @@ impl Regex {
             }
             FindAll::FwdPrefix => match &self.prefix {
                 Some(prefix::PrefixKind::AnchoredFwd(fp)) => self.find_all_fwd_prefix(fp, input),
-                _ => unreachable!("FwdPrefix without AnchoredFwd prefix"),
+                _ => Err(Error::InternalError("FwdPrefix without AnchoredFwd prefix")),
             },
             FindAll::FwdLbPrefix => match &self.prefix {
                 Some(prefix::PrefixKind::AnchoredFwdLb(fp)) => {
                     self.find_all_fwd_lb_prefix(fp, input)
                 }
-                _ => unreachable!("FwdLbPrefix without AnchoredFwdLb prefix"),
+                _ => Err(Error::InternalError("FwdLbPrefix without AnchoredFwdLb prefix")),
             },
         }
     }
@@ -1749,6 +1754,9 @@ impl Regex {
                 });
             }
             return Ok(matches.clone());
+        }
+        if self.rev_trivial && !self.hardened {
+            debug_assert!(false,"found bug: this path should be eliminated");
         }
         if self.initial_nullability.has(Nullability::END) {
             inner.nulls.push(input.len());

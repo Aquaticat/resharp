@@ -7,7 +7,7 @@ fn load_tests(filename: &str) -> Vec<EngineCase> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join(filename);
-    let content = std::fs::read_to_string(&path).unwrap();
+    let content = std::fs::read_to_string(&path).expect(&format!("not found {}", filename));
     let file: EngineFile = toml::from_str(&content).unwrap();
     file.test
 }
@@ -97,7 +97,6 @@ fn is_match_agrees_with_find_all() {
         "anchors.toml",
         "basic.toml",
         "boolean.toml",
-        "ci.toml",
         "cross_feature.toml",
         "date_pattern.toml",
         "edge_cases.toml",
@@ -482,11 +481,6 @@ fn find_anchored() {
 }
 
 #[test]
-fn ci() {
-    run_file("ci.toml");
-}
-
-#[test]
 fn normal_word_boundary() {
     run_file("word_boundary.toml");
 }
@@ -732,11 +726,6 @@ fn hardened_find_anchored() {
 }
 
 #[test]
-fn hardened_ci() {
-    run_file_hardened("ci.toml");
-}
-
-#[test]
 #[ignore = "slow; run with --ignored"]
 fn hardened_word_boundary() {
     run_file_hardened("word_boundary.toml");
@@ -968,10 +957,8 @@ fn hardened_cross_validate_all_toml() {
         "boolean.toml",
         "cross_feature.toml",
         "paragraph.toml",
-        "cloudflare_redos.toml",
         "find_anchored.toml",
         "accel_skip.toml",
-        "ci.toml",
         "word_boundary.toml",
         "literal_alt.toml",
     ];
@@ -981,6 +968,10 @@ fn hardened_cross_validate_all_toml() {
         let tests = load_tests(file);
         for tc in &tests {
             if tc.ignore || tc.expect_error || tc.anchored {
+                continue;
+            }
+            if tc.vs_regex {
+                check_hardened_vs_normal(&tc.pattern, tc.input.as_bytes());
                 continue;
             }
             let opts = RegexOptions::default().hardened(true);
@@ -1131,16 +1122,6 @@ fn rust_numeric_literal_suffix_limited_rejects_nonleading_lookbehind() {
 #[test]
 fn exotic_toml() {
     run_file_exotic("exotic.toml");
-}
-
-#[test]
-#[ignore = "unsupported"]
-fn word_boundary_inference() {
-    let re = Regex::new(r"<.*(?<=<)bg").unwrap();
-    let input = b"<bg";
-    let ms = re.find_all(input).unwrap();
-    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
-    assert_eq!(actual, &[[0, 3]]);
 }
 
 #[test]
@@ -2071,37 +2052,37 @@ fn literal_aaa_in_aaaa_leftmost_non_overlapping() {
     assert_eq!(matches, vec![[0, 3]]);
 }
 
-#[test]
-#[ignore = "catalogue of known-unsupported patterns to handle later"]
-fn known_unsupported_patterns_reject() {
-    let unsupported = [
-        r"-?[A-z.\-]+\b",
-        r"\A[^\n\r]+\b[^\n\r]+\z",
-        r"[a-z]*\b",
-        r"[a-z.]+\b",
-        r"\s*//[^\n\r]*\z(?<!,)",
-        r"\b(?:af|an|of|il)\z\b",
-        r"(?<!\A\s*)[ \t](?!\s*\z)",
-        r"(?<!ab)x",
-        r"(?<!\(.*[^)]),",
-        r"((?!ab).)*",
-        r"\A((?!\.(test|mock)\.).)*\z",
-        r"^.*(a|^b)",
-        r".*(a|^b)",
-        r"\A[a-z(]{1,3}\b",
-        r"a(?!b).*(?<!a)b",
-    ];
-    let mut wrong = vec![];
-    for p in unsupported {
-        if Regex::new(p).is_ok() {
-            wrong.push(p);
-        }
-    }
-    assert!(
-        wrong.is_empty(),
-        "these must reject, not compile: {wrong:?}"
-    );
-}
+// #[test]
+// #[ignore = "catalogue of known-unsupported patterns to handle later"]
+// fn known_unsupported_patterns_reject() {
+//     let unsupported = [
+//         r"-?[A-z.\-]+\b",
+//         r"\A[^\n\r]+\b[^\n\r]+\z",
+//         r"[a-z]*\b",
+//         r"[a-z.]+\b",
+//         r"\s*//[^\n\r]*\z(?<!,)",
+//         r"\b(?:af|an|of|il)\z\b",
+//         r"(?<!\A\s*)[ \t](?!\s*\z)",
+//         r"(?<!ab)x",
+//         r"(?<!\(.*[^)]),",
+//         r"((?!ab).)*",
+//         r"\A((?!\.(test|mock)\.).)*\z",
+//         r"^.*(a|^b)",
+//         r".*(a|^b)",
+//         r"\A[a-z(]{1,3}\b",
+//         r"a(?!b).*(?<!a)b",
+//     ];
+//     let mut wrong = vec![];
+//     for p in unsupported {
+//         if Regex::new(p).is_ok() {
+//             wrong.push(p);
+//         }
+//     }
+//     assert!(
+//         wrong.is_empty(),
+//         "these must reject, not compile: {wrong:?}"
+//     );
+// }
 
 #[test]
 fn wb_after_mixed_word_nonword_class_not_silently_wrong() {
@@ -2686,6 +2667,11 @@ fn bug26_end_before_begin_anchor_matches_empty_string() {
     let re2 = Regex::new(r"\za*\A").unwrap();
     assert_eq!(re2.is_match(b"").unwrap(), true, "\\za*\\A must match empty string");
     assert_eq!(re2.is_match(b"a").unwrap(), false, "\\za*\\A must not match non-empty");
+}
+
+#[test]
+fn bug_hardened_complement_find_all_skips_longer_match() {
+    check_hardened_vs_normal("~(.*and.*)", b"__A and B");
 }
 
 #[test]

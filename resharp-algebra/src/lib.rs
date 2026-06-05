@@ -2638,43 +2638,6 @@ impl RegexBuilder {
             return Some(right);
         }
 
-        // if left.is_inter(self) && right.is_inter(self) {
-        //     // TODO: not terminating
-        //     let mut lconj: Vec<NodeId> = Vec::new();
-        //     left.any_inter_component(self, |v| {
-        //         lconj.push(v);
-        //         false
-        //     });
-        //     let lconj_initial = lconj.len();
-        //     let mut common = NodeId::TS;
-        //     let mut r_rest = NodeId::TS;
-        //     let mut cur = right;
-        //     loop {
-        //         let (v, next) = if cur.kind(self) == Inter {
-        //             (cur.left(self), Some(cur.right(self)))
-        //         } else {
-        //             (cur, None)
-        //         };
-        //         if let Some(pos) = lconj.iter().position(|&x| x == v) {
-        //             lconj.swap_remove(pos);
-        //             common = self.mk_inter(v, common);
-        //         } else {
-        //             r_rest = self.mk_inter(v, r_rest);
-        //         }
-        //         match next {
-        //             Some(n) => cur = n,
-        //             None => break,
-        //         }
-        //     }
-        //     if lconj.len() < lconj_initial {
-        //         let l_rest = lconj
-        //             .iter()
-        //             .fold(NodeId::TS, |acc, &v| self.mk_inter(v, acc));
-        //         let inner_union = self.mk_union(l_rest, r_rest);
-        //         return Some(self.mk_inter(common, inner_union));
-        //     }
-        // }
-
         if left.is_pred(self) && right.is_pred(self) {
             let l = left.pred_tset(self);
             let r = right.pred_tset(self);
@@ -4477,7 +4440,7 @@ impl RegexBuilder {
         node_id: NodeId,
         memo: &mut FxHashMap<NodeId, NodeId>,
     ) -> NodeId {
-        assert!(node_id != NodeId::MISSING);
+        debug_assert!(node_id != NodeId::MISSING);
         if node_id == NodeId::MISSING {
             return node_id;
         }

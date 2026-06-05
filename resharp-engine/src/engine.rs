@@ -14,6 +14,26 @@ pub const DFA_MISSING: u16 = 0;
 pub const DFA_DEAD: u16 = 1;
 pub const DFA_INITIAL: u16 = 2;
 
+#[inline(always)]
+fn as_sid(s: u32) -> Result<u16, Error> {
+    u16::try_from(s).map_err(|_| Error::CapacityExceeded)
+}
+
+#[inline(always)]
+fn found(pos: usize) -> Option<usize> {
+    (pos != NO_MATCH).then_some(pos)
+}
+
+#[inline(always)]
+fn center_or_end(at_end: bool) -> Nullability {
+    if at_end { Nullability::END } else { Nullability::CENTER }
+}
+
+#[inline(always)]
+fn dfa_delta(state: u32, mt: u32, mt_log: u32) -> usize {
+    (state << mt_log | mt) as usize
+}
+
 pub(crate) struct PartitionTree {
     sets: Vec<TSetId>,
     lefts: Vec<u32>,
@@ -315,7 +335,7 @@ impl LDFA {
         let center_table_size = state_nodes.len() * stride;
         let mut center_table = vec![DFA_MISSING; center_table_size];
         for mt_idx in 0..minterms.len() {
-            center_table[(DFA_DEAD as usize) << mt_log | mt_idx] = DFA_DEAD;
+            center_table[dfa_delta(DFA_DEAD as u32, mt_idx as u32, mt_log)] = DFA_DEAD;
         }
 
         while effects.len() < b.nulls_count() {
@@ -350,7 +370,7 @@ impl LDFA {
 
     #[inline(always)]
     pub fn dfa_delta(&self, state_id: u16, mt: u32) -> usize {
-        ((state_id as u32) << self.mt_log | mt) as usize
+        dfa_delta(state_id as u32, mt, self.mt_log)
     }
 
     pub fn ensure_capacity(&mut self, state_id: u16) {
@@ -373,6 +393,7 @@ impl LDFA {
             let new_len = new_len.max(cap);
             self.skip_ids.resize(new_len, 0u8);
         }
+        debug_assert!(self.center_table.len() >= cap * stride);
     }
 
     pub fn get_or_register(&mut self, b: &mut RegexBuilder, node: NodeId) -> u16 {
@@ -388,6 +409,12 @@ impl LDFA {
         );
         self.ensure_capacity(sid);
         sid
+    }
+
+    fn try_create(&mut self, b: &mut RegexBuilder, curr: u32) {
+        if let Ok(sid) = u16::try_from(curr) {
+            self.create_state(b, sid).ok();
+        }
     }
 
     #[inline(always)]
@@ -557,7 +584,7 @@ impl LDFA {
         let sder = b.der(node, Nullability::CENTER).map_err(Error::Algebra)?;
         for mt_idx in 0..self.minterms.len() {
             let delta = self.dfa_delta(state_id, mt_idx as u32);
-            if delta < self.center_table.len() && self.center_table[delta] != DFA_MISSING {
+            if self.center_table[delta] != DFA_MISSING {
                 continue;
             }
             let mt = self.minterms[mt_idx];
@@ -832,27 +859,22 @@ impl LDFA {
         let mt = self.mt_lookup[data[pos_begin] as usize];
         let mut curr = self.begin_table[mt as usize] as u32;
         if curr <= DFA_DEAD as u32 {
-            return Ok((max_end != NO_MATCH).then_some(max_end));
+            return Ok(found(max_end));
         }
         let end = data.len();
         let mut pos = pos_begin + 1;
 
-        let mask = if pos == end {
-            Nullability::END
-        } else {
-            Nullability::CENTER
-        };
         collect_max_fwd(
             &self.effects_id,
             &self.effects,
             curr,
             pos,
-            mask,
+            center_or_end(pos == end),
             &mut max_end,
         );
 
         if pos == end {
-            return Ok((max_end != NO_MATCH).then_some(max_end));
+            return Ok(found(max_end));
         }
 
         loop {
@@ -865,7 +887,7 @@ impl LDFA {
                 break;
             }
 
-            let sid = state as u16;
+            let sid = as_sid(state)?;
             self.create_state(b, sid)?;
 
             let mt = self.mt_lookup[data[new_pos] as usize] as u32;
@@ -875,19 +897,14 @@ impl LDFA {
                 break;
             }
 
-            self.create_state(b, curr as u16)?;
+            self.create_state(b, as_sid(curr)?)?;
 
-            let mask = if pos == end {
-                Nullability::END
-            } else {
-                Nullability::CENTER
-            };
             collect_max_fwd(
                 &self.effects_id,
                 &self.effects,
                 curr,
                 pos,
-                mask,
+                center_or_end(pos == end),
                 &mut max_end,
             );
 
@@ -896,7 +913,7 @@ impl LDFA {
             }
         }
 
-        Ok((max_end != NO_MATCH).then_some(max_end))
+        Ok(found(max_end))
     }
 
     /// scan_fwd_all is guaranteed to find a match, given a valid, pre-checked start position
@@ -942,7 +959,7 @@ impl LDFA {
                         (state as u32, new_pos)
                     } else {
                         let mt = self.mt_lookup[data[new_pos] as usize] as u32;
-                        let new_state = self.lazy_transition(b, state as u16, mt)? as u32;
+                        let new_state = self.lazy_transition(b, as_sid(state)?, mt)? as u32;
                         l_pos = new_pos + 1;
                         l_state = new_state;
                         if l_pos != data_end {
@@ -999,7 +1016,7 @@ impl LDFA {
                 if cache_miss {
                     debug_assert!(new_pos >= l_pos, "backwards");
                     let mt = self.mt_lookup[data[new_pos] as usize] as u32;
-                    let next_state = self.lazy_transition(b, state as u16, mt)? as u32;
+                    let next_state = self.lazy_transition(b, as_sid(state)?, mt)? as u32;
                     l_pos = new_pos + 1;
                     l_state = next_state;
                     if l_pos != data_end {
@@ -1110,12 +1127,12 @@ impl LDFA {
                 return Ok((state_out, new_pos, false));
             }
             let mt = self.mt_lookup[data[new_pos] as usize] as u32;
-            curr = self.lazy_transition(b, state_out as u16, mt)? as u32;
+            curr = self.lazy_transition(b, as_sid(state_out)?, mt)? as u32;
             pos = new_pos + 1;
             if curr <= DFA_DEAD as u32 {
                 return Ok((curr, pos, false));
             }
-            self.create_state(b, curr as u16).ok();
+            self.try_create(b, curr);
             if has_any_null(&self.effects_id, &self.effects, curr, Nullability::CENTER) {
                 return Ok((curr, pos, true));
             }
@@ -1182,7 +1199,7 @@ impl LDFA {
                 Nullability::END,
                 &mut max_end,
             );
-            return Ok((max_end != NO_MATCH).then_some(max_end));
+            return Ok(found(max_end));
         }
 
         loop {
@@ -1196,25 +1213,20 @@ impl LDFA {
             }
 
             let mt = self.mt_lookup[data[new_pos] as usize] as u32;
-            curr = self.lazy_transition(b, state_out as u16, mt)? as u32;
+            curr = self.lazy_transition(b, as_sid(state_out)?, mt)? as u32;
             pos = new_pos + 1;
             if curr <= DFA_DEAD as u32 {
                 break;
             }
 
-            self.create_state(b, curr as u16).ok();
+            self.try_create(b, curr);
 
-            let mask = if pos >= end {
-                Nullability::END
-            } else {
-                Nullability::CENTER
-            };
             collect_max_fwd(
                 &self.effects_id,
                 &self.effects,
                 curr,
                 pos,
-                mask,
+                center_or_end(pos >= end),
                 &mut max_end,
             );
 
@@ -1223,7 +1235,7 @@ impl LDFA {
             }
         }
 
-        Ok((max_end != NO_MATCH).then_some(max_end))
+        Ok(found(max_end))
     }
 
     pub fn scan_rev_from(
@@ -1244,17 +1256,12 @@ impl LDFA {
         }
 
         let mut min_start = NO_MATCH;
-        let mask = if start_pos == begin {
-            Nullability::END
-        } else {
-            Nullability::CENTER
-        };
         collect_max_rev(
             &self.effects_id,
             &self.effects,
             curr,
             start_pos,
-            mask,
+            center_or_end(start_pos == begin),
             &mut min_start,
         );
 
@@ -1262,33 +1269,28 @@ impl LDFA {
         while pos > begin {
             pos -= 1;
             let mt = self.mt_lookup[data[pos] as usize] as u32;
-            let delta = (curr << self.mt_log | mt) as usize;
+            let delta = dfa_delta(curr, mt, self.mt_log);
             let next = self.center_table[delta];
             if next == DFA_MISSING {
-                curr = self.lazy_transition(b, curr as u16, mt)? as u32;
-                self.create_state(b, curr as u16).ok();
+                curr = self.lazy_transition(b, as_sid(curr)?, mt)? as u32;
+                self.try_create(b, curr);
             } else {
                 curr = next as u32;
             }
             if curr <= DFA_DEAD as u32 {
                 break;
             }
-            let mask = if pos == begin {
-                Nullability::END
-            } else {
-                Nullability::CENTER
-            };
             collect_max_rev(
                 &self.effects_id,
                 &self.effects,
                 curr,
                 pos,
-                mask,
+                center_or_end(pos == begin),
                 &mut min_start,
             );
         }
 
-        Ok((min_start != NO_MATCH).then_some(min_start))
+        Ok(found(min_start))
     }
 
     pub(crate) fn can_skip(&self) -> bool {
@@ -1400,11 +1402,11 @@ impl LDFA {
             }
 
             if !cache_miss {
-                self.handle_rev_end(b, state as u16, data, nulls)?;
+                self.handle_rev_end(b, as_sid(state)?, data, nulls)?;
                 break;
             }
 
-            let sid = state as u16;
+            let sid = as_sid(state)?;
             self.create_state(b, sid)?;
 
             let mt = self.mt_lookup[data[new_pos] as usize] as u32;
@@ -1416,12 +1418,7 @@ impl LDFA {
                 break;
             }
 
-            let mask = if pos == 0 {
-                Nullability::END
-            } else {
-                Nullability::CENTER
-            };
-            collect_nulls(&self.effects_id, &self.effects, curr, pos, mask, nulls);
+            collect_nulls(&self.effects_id, &self.effects, curr, pos, center_or_end(pos == 0), nulls);
             #[cfg(feature = "debug")]
             {
                 let node = self.state_nodes[curr as usize];
@@ -1473,13 +1470,13 @@ impl LDFA {
             }
 
             if cache_miss {
-                let sid = state as u16;
+                let sid = as_sid(state)?;
                 self.create_state(b, sid)?;
                 curr = sid as u32;
                 pos = new_pos + 1;
                 continue;
             } else {
-                self.handle_rev_end(b, state as u16, data, nulls)?;
+                self.handle_rev_end(b, as_sid(state)?, data, nulls)?;
                 break;
             }
         }
@@ -1631,7 +1628,7 @@ fn collect_rev_center_simple(
     nulls: &mut Vec<usize>,
 ) {
     unsafe {
-        let v = &*effects.add(eid as usize);
+        let v = &*effects.add(eid as usize); // bounds: see `register_state`
         for n in v {
             nulls.push(pos + n.rel as usize);
         }
@@ -1648,7 +1645,7 @@ fn collect_rev_complex(
     nulls: &mut Vec<usize>,
 ) {
     unsafe {
-        let effects_vec = &*effects.add(eid as usize);
+        let effects_vec = &*effects.add(eid as usize); // bounds: see `register_state`
         for n in effects_vec {
             if n.mask.has(mask) {
                 nulls.push(pos + n.rel as usize);
@@ -1700,19 +1697,7 @@ fn collect_max<const REV: bool>(
 }
 
 #[inline(always)]
-pub(crate) fn collect_max_fwd_pub(
-    effects_id: &[u16],
-    effects: &[Vec<NullState>],
-    state: u32,
-    pos: usize,
-    mask: Nullability,
-    best: &mut usize,
-) {
-    collect_max::<false>(effects_id, effects, state, pos, mask, best);
-}
-
-#[inline(always)]
-fn collect_max_fwd(
+pub(crate) fn collect_max_fwd(
     effects_id: &[u16],
     effects: &[Vec<NullState>],
     state: u32,
@@ -1736,7 +1721,6 @@ pub(crate) fn collect_max_rev(
 }
 
 #[inline(never)]
-#[cfg_attr(not(feature = "debug"), allow(unused_variables))]
 fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool, const INITIAL_SKIP: bool>(
     t: &ScanTables,
     skip_ids: &[u8],
@@ -1762,16 +1746,18 @@ fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool, const INITIAL_SKIP: boo
                         Some(skip_pos) => {
                             if pos != skip_pos {
                                 pos = skip_pos + 1;
-                                let eid = unsafe { *center_effect_id.add(curr as usize) };
-                                if eid == EID_CENTER0 as _ {
-                                    nulls.push(pos + 1);
-                                } else if eid != EID_NONE as _ {
-                                    collect_rev_center_simple(
-                                        t.effects,
-                                        eid as u32,
-                                        pos + 1,
-                                        nulls,
-                                    );
+                                let eid = unsafe { *center_effect_id.add(curr as usize) }; // bounds: see `register_state`
+                                if eid != EID_NONE as _ {
+                                    if eid == EID_CENTER0 as _ {
+                                        nulls.push(pos + 1);
+                                    } else {
+                                        collect_rev_center_simple(
+                                            t.effects,
+                                            eid as u32,
+                                            pos + 1,
+                                            nulls,
+                                        );
+                                    }
                                 }
                                 if skip_pos == 0 {
                                     continue;
@@ -1786,7 +1772,7 @@ fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool, const INITIAL_SKIP: boo
                 } else {
                     let searcher = &skip_searchers[sid as usize - 1];
                     let lo = searcher.find_rev(&data[..pos]).unwrap_or(0);
-                    let eid = unsafe { *center_effect_id.add(curr as usize) };
+                    let eid = unsafe { *center_effect_id.add(curr as usize) }; // bounds: see `register_state`
                     if eid == EID_NONE as _ {
                     } else if eid == EID_CENTER0 as _ {
                         nulls.extend((lo + 1..pos).rev());
@@ -1805,12 +1791,12 @@ fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool, const INITIAL_SKIP: boo
         pos -= 1;
         unsafe {
             let mt = *minterms_lookup.add(*data.as_ptr().add(pos) as usize) as u32;
-            let next = *center_table.add((curr << mt_log | mt) as usize);
+            let next = *center_table.add(dfa_delta(curr, mt, mt_log));
             if next == DFA_MISSING {
                 return (curr, pos, true);
             }
             curr = next as u32;
-            let eid = *center_effect_id.add(curr as usize);
+            let eid = *center_effect_id.add(curr as usize); // bounds: see `register_state`
             if eid != EID_NONE as _ {
                 if eid == EID_CENTER0 as _ {
                     nulls.push(pos);
@@ -1838,7 +1824,7 @@ unsafe fn fwd_update<const IS_END: bool>(
     pos: usize,
     max_end: usize,
 ) -> usize {
-    let eid = unsafe { *effect_id.add(state as usize) };
+    let eid = unsafe { *effect_id.add(state as usize) }; // bounds: see `register_state`
     if eid == EID_NONE as u16 {
         return max_end;
     }
@@ -1849,7 +1835,7 @@ unsafe fn fwd_update<const IS_END: bool>(
             max_end.max(pos)
         };
     }
-    let v = unsafe { &*effects.add(eid as usize) };
+    let v = unsafe { &*effects.add(eid as usize) }; // bounds: see `register_state`
     debug_assert!(v.windows(2).all(|w| w[0].rel >= w[1].rel));
     let pick = if IS_END {
         v.iter().rev().find(|n| n.mask.has(Nullability::END))
@@ -1945,7 +1931,7 @@ fn scan_fwd_verify<const SKIP: bool>(
                         max_end,
                     );
                 }
-                let delta = (curr << mt_log | mt) as usize;
+                let delta = dfa_delta(curr, mt, mt_log);
                 let next = *center_table.add(delta);
                 if next == DFA_MISSING {
                     return (curr, pos, max_end, true);
@@ -2027,7 +2013,7 @@ fn scan_fwd_first_null<const SKIP: bool>(
         while pos < end {
             unsafe {
                 let mt = *minterms_lookup.add(*data.add(pos) as usize) as u32;
-                let delta = (curr << mt_log | mt) as usize;
+                let delta = dfa_delta(curr, mt, mt_log);
                 let next = *center_table.add(delta);
                 if next == DFA_MISSING {
                     return (curr, pos, false, true);
@@ -2038,7 +2024,7 @@ fn scan_fwd_first_null<const SKIP: bool>(
                 curr = next as u32;
             }
             pos += 1;
-            let eid = unsafe { *effects_id.add(curr as usize) as u32 };
+            let eid = unsafe { *effects_id.add(curr as usize) as u32 }; // bounds: see `register_state`
             if eid != 0 && eid != EID_BEGIN0 && eid != EID_END0 {
                 return (curr, pos, true, false);
             }
@@ -2115,7 +2101,7 @@ fn scan_fwd<const SKIP: bool>(
             max_end =
                 fwd_update::<false>(center_effect_id, center_effects, l_state, l_pos, max_end);
             let mt = *minterms_lookup.add(*data.add(l_pos) as usize) as u32;
-            let delta = (l_state << mt_log | mt) as usize;
+            let delta = dfa_delta(l_state, mt, mt_log);
             let next = *center_table.add(delta) as u32;
             if next == DFA_MISSING as u32 {
                 return (l_state, l_pos, max_end, true);
@@ -2168,5 +2154,10 @@ fn register_state(
     while effects.len() <= eff_id.0 as usize || effects.len() <= eid.0 as usize {
         effects.push(b.nulls_entry_vec(effects.len() as u32));
     }
+    // all of these must hold while matching
+    debug_assert!((sid as usize) < effects_id.len());
+    debug_assert!((sid as usize) < center_effect_id.len());
+    debug_assert!((effects_id[sid as usize] as usize) < effects.len());
+    debug_assert!((center_effect_id[sid as usize] as usize) < effects.len());
     sid
 }

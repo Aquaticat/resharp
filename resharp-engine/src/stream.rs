@@ -103,7 +103,7 @@ fn resolve_emit(
         return None;
     }
     let mut match_end = 0usize;
-    engine::collect_max_fwd_pub(
+    engine::collect_max_fwd(
         &fwd.effects_id,
         &fwd.effects,
         state,
@@ -233,7 +233,7 @@ fn try_emit_step<const REV: bool, F: FnMut(usize, usize)>(
         return Ok(false);
     }
     let mut match_end = 0usize;
-    engine::collect_max_fwd_pub(
+    engine::collect_max_fwd(
         &dfa.effects_id,
         &dfa.effects,
         state,
@@ -569,7 +569,7 @@ impl Regex {
             let dfa = &inner.fwd_ts;
             if engine::has_any_null(&dfa.effects_id, &dfa.effects, state, Nullability::CENTER) {
                 let mut match_end = 0usize;
-                engine::collect_max_fwd_pub(
+                engine::collect_max_fwd(
                     &dfa.effects_id,
                     &dfa.effects,
                     state,
@@ -585,7 +585,7 @@ impl Regex {
             let dfa = &inner.fwd_ts;
             if engine::has_any_null(&dfa.effects_id, &dfa.effects, state, Nullability::END) {
                 let mut match_end = 0usize;
-                engine::collect_max_fwd_pub(
+                engine::collect_max_fwd(
                     &dfa.effects_id,
                     &dfa.effects,
                     state,

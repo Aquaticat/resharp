@@ -157,3 +157,9 @@ name = "bug10_lb_start_compl_newline"
 pattern = '(?<=^)~(0+)'
 input = "\n"
 rev_nulls = [1, 0]
+
+[[test]]
+name = "complement_and_rev_nulls"
+pattern = '~(.*and.*)'
+input = "__A and B"
+rev_nulls = [8, 7, 6, 5, 4, 3, 2, 1, 0]
