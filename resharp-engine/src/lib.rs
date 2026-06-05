@@ -285,6 +285,7 @@ pub struct Regex {
     /// node = ⊥
     /// found to be trivially unmatchable, not guaranteed before full expansion
     pub(crate) is_empty_lang: bool,
+    #[allow(dead_code)]
     pub(crate) fwd_begin_anchored: bool,
     #[allow(dead_code)]
     pub(crate) rev_end_anchored: bool,
