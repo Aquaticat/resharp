@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use crate::{accel::FwdPrefixSearch, engine, Error, Match, Regex, RegexBuilder};
 
 fn fwd_prefix_impl<const IS_MATCH: bool>(

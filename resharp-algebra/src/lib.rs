@@ -3238,8 +3238,15 @@ impl RegexBuilder {
             && self.nullability(tail) == Nullability::NEVER
             && !self.contains_look(tail)
         {
-            let l = self.mk_concat(head.left(self), tail);
-            let r = self.mk_concat(head.right(self), tail);
+            let (hl, hr) = (head.left(self), head.right(self));
+            
+            if (hl.is_eps() && hr.is_lookahead(self))
+                || (hr.is_eps() && hl.is_lookahead(self))
+            {
+                return self.init_as(key, tail);
+            }
+            let l = self.mk_concat(hl, tail);
+            let r = self.mk_concat(hr, tail);
             let u = self.mk_union(l, r);
             return self.init_as(key, u);
         }

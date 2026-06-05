@@ -286,6 +286,7 @@ pub struct Regex {
     /// found to be trivially unmatchable, not guaranteed before full expansion
     pub(crate) is_empty_lang: bool,
     pub(crate) fwd_begin_anchored: bool,
+    #[allow(dead_code)]
     pub(crate) rev_end_anchored: bool,
     /// rev = _*, skip rev pass entirely
     pub(crate) rev_trivial: bool,
@@ -296,12 +297,14 @@ pub struct Regex {
     // pub(crate) trailing_star_anchored_left: bool,
     // pub(crate) trailing_star_branch_left: bool,
     pub(crate) hardened: bool,
+    #[allow(dead_code)]
     pub(crate) has_bounded: bool,
     pub(crate) bounded_safe_find_all: bool,
     pub(crate) lb_check_bytes: u8,
     pub(crate) fwd_lb_begin_nullable: bool,
     pub(crate) fwd_lb_body_nullable: bool,
     pub(crate) has_anchors: bool,
+    pub(crate) has_lb: bool,
     pub(crate) find_all: FindAll,
     pub(crate) stream_cache: stream::StreamCache,
 }
@@ -1114,6 +1117,7 @@ impl Regex {
             false
         };
         let has_anchors = b.contains_anchors(node);
+        let has_lb = b.contains_lookbehind(node);
 
         let hardened = if opts.hardened && !has_bounded && fixed_length.is_none() && max_cap >= 64 {
             fwd.has_nonnullable_cycle(&mut b, 256)
@@ -1121,11 +1125,13 @@ impl Regex {
             false
         };
 
-        let fas = if hardened {
-            Some(fas::FwdDFA::new(
-                &fwd,
-                fwd_start.contains_lookahead(&b) || initial_nullability != Nullability::ALWAYS,
-            ))
+        let fas = if hardened || initial_nullability == Nullability::ALWAYS {
+            let ksm = if hardened {
+                fwd_start.contains_lookahead(&b) || initial_nullability != Nullability::ALWAYS
+            } else {
+                true
+            };
+            Some(fas::FwdDFA::new(&fwd, ksm))
         } else {
             None
         };
@@ -1160,8 +1166,6 @@ impl Regex {
             rev_trivial,
             initial_nullability,
             fwd_end_nullable,
-            // trailing_star_anchored_left,
-            // trailing_star_branch_left,
             hardened,
             has_bounded,
             bounded_safe_find_all,
@@ -1169,6 +1173,7 @@ impl Regex {
             fwd_lb_begin_nullable,
             fwd_lb_body_nullable,
             has_anchors,
+            has_lb,
             stream_cache: Default::default(),
         })
     }
@@ -1176,13 +1181,13 @@ impl Regex {
     #[cfg(feature = "diag")]
     #[allow(missing_docs)]
     pub fn node_count(&self) -> u32 {
-        self.inner.lock().unwrap().b.num_nodes()
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).b.num_nodes()
     }
 
     #[cfg(feature = "diag")]
     #[allow(missing_docs)]
     pub fn dfa_stats(&self) -> (usize, usize) {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         (inner.fwd.state_nodes.len(), inner.rev_ts.state_nodes.len())
     }
 
@@ -1210,7 +1215,7 @@ impl Regex {
     #[cfg(feature = "diag")]
     #[allow(missing_docs)]
     pub fn bdfa_stats(&self) -> Option<(usize, usize, usize)> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner
             .bounded
             .as_ref()
@@ -1242,7 +1247,7 @@ impl Regex {
     #[cfg(feature = "diag")]
     #[allow(missing_docs)]
     pub fn has_accel(&self) -> (bool, bool) {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let fwd = self.prefix.as_ref().is_some_and(|p| p.is_fwd());
         let rev = self.prefix.as_ref().is_some_and(|p| p.is_rev())
             || inner.rev_ts.prefix_skip.is_some()
@@ -1463,7 +1468,7 @@ impl Regex {
     #[cfg(feature = "diag")]
     #[allow(missing_docs)]
     pub fn rev_state_dump(&self) -> String {
-        let inner = &mut *self.inner.lock().unwrap();
+        let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let rev = &inner.rev_ts;
         let mut out = String::new();
         for (i, &node) in rev.state_nodes.iter().enumerate() {
@@ -1486,7 +1491,7 @@ impl Regex {
     #[cfg(feature = "diag")]
     #[allow(missing_docs)]
     pub fn effects_debug(&self) -> String {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let rev = &inner.rev_ts;
         let mut out = String::new();
         for (i, &eid) in rev.effects_id.iter().enumerate() {
@@ -1504,7 +1509,7 @@ impl Regex {
     #[cfg(feature = "diag")]
     #[allow(missing_docs)]
     pub fn collect_rev_nulls_debug(&self, input: &[u8]) -> Vec<usize> {
-        let inner = &mut *self.inner.lock().unwrap();
+        let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner.nulls.clear();
         inner
             .rev_ts
@@ -1516,7 +1521,7 @@ impl Regex {
     #[cfg(feature = "diag")]
     #[allow(missing_docs)]
     pub fn scan_fwd_debug(&self, input: &[u8], pos: usize) -> usize {
-        let inner = &mut *self.inner.lock().unwrap();
+        let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner.fwd.scan_fwd_slow(&mut inner.b, pos, input).unwrap()
     }
 
@@ -1526,7 +1531,7 @@ impl Regex {
     #[allow(missing_docs)]
     pub fn rev_walk_trace(&self, input: &[u8]) -> String {
         use std::fmt::Write;
-        let inner = &mut *self.inner.lock().unwrap();
+        let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let rev = &mut inner.rev_ts;
         let b = &mut inner.b;
         let mut out = String::new();
@@ -1563,7 +1568,7 @@ impl Regex {
     #[cfg(feature = "diag")]
     #[allow(missing_docs)]
     pub fn fwd_state_dump(&self) -> String {
-        let inner = &mut *self.inner.lock().unwrap();
+        let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let fwd = &inner.fwd;
         let mut out = String::new();
         for (i, &node) in fwd.state_nodes.iter().enumerate() {
@@ -1584,7 +1589,7 @@ impl Regex {
     #[allow(missing_docs)]
     pub fn fwd_walk_trace(&self, input: &[u8]) -> String {
         use std::fmt::Write;
-        let inner = &mut *self.inner.lock().unwrap();
+        let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let fwd = &mut inner.fwd;
         let b = &mut inner.b;
         let mut out = String::new();
@@ -1696,7 +1701,7 @@ impl Regex {
     /// `Y·_*` shape: emit single match at leftmost Y start.
     #[allow(dead_code)]
     fn find_all_trailing_star(&self, input: &[u8]) -> Result<Vec<Match>, Error> {
-        let inner = &mut *self.inner.lock().unwrap();
+        let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let mut pos = 0;
         while pos < input.len() {
             let max_end = inner.fwd.scan_fwd_slow(&mut inner.b, pos, input)?;
@@ -1721,11 +1726,29 @@ impl Regex {
 
     fn find_all_dfa_inner<const FWD_NULL: bool>(&self, input: &[u8]) -> Result<Vec<Match>, Error> {
         debug_assert!(!input.is_empty());
-        let inner = &mut *self.inner.lock().unwrap();
+        let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner.nulls.clear();
         inner.matches.clear();
 
-        if (self.always_nullable || self.rev_trivial) && !self.hardened {
+        if self.always_nullable && !self.hardened {
+            let RegexInner {
+                ref mut b,
+                ref mut fwd,
+                ref mut matches,
+                ref mut fas,
+                ..
+            } = *inner;
+            let fas = fas.as_mut().expect("fas initialized for always_nullable");
+            fwd.scan_fwd_active_set::<true>(b, fas, input, &[], matches)?;
+            if matches.last().map(|m| m.start) != Some(input.len()) {
+                matches.push(Match {
+                    start: input.len(),
+                    end: input.len(),
+                });
+            }
+            return Ok(matches.clone());
+        }
+        if self.rev_trivial && !self.hardened {
             Self::find_all_nullable_slow(&mut inner.fwd, &mut inner.b, input, &mut inner.matches)?;
             return Ok(inner.matches.clone());
         }
@@ -1844,7 +1867,15 @@ impl Regex {
                 Ok(None)
             };
         }
-        let inner = &mut *self.inner.lock().unwrap();
+        let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        
+        if self.has_lb && !self.rev_trivial && !self.always_nullable {
+            // may be inefficient but.. why would you pass a lookbehind to an anchored method
+            let first = inner.fwd_ts.scan_fwd_first_null_from(&mut inner.b, engine::DFA_INITIAL as u32, 0, input)?;
+            if first.2 {
+                return Ok(None);
+            }
+        }
         let max_end = inner.fwd.scan_fwd_slow(&mut inner.b, 0, input)?;
         if max_end != engine::NO_MATCH {
             Ok(Some(Match {
@@ -1854,6 +1885,12 @@ impl Regex {
         } else {
             Ok(None)
         }
+    }
+
+    pub(crate) fn is_match_fwd_ts(&self, input: &[u8]) -> Result<bool, Error> {
+        let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let max_end = inner.fwd_ts.scan_fwd_slow(&mut inner.b, 0, input)?;
+        Ok(max_end != engine::NO_MATCH)
     }
 
     /// whether the pattern matches anywhere in the input.
@@ -1871,17 +1908,8 @@ impl Regex {
             FindAll::EmptyLang => Ok(false),
             FindAll::Anchored => Ok(self.find_anchored(input)?.is_some()),
             FindAll::Hardened | FindAll::Dfa => Ok(!self.find_all_dfa(input)?.is_empty()),
-            FindAll::Bounded => self.is_match_fwd_bounded(input),
-            FindAll::FwdPrefix => match &self.prefix {
-                Some(prefix::PrefixKind::AnchoredFwd(fp)) => self.is_match_fwd_prefix(fp, input),
-                _ => unreachable!("FwdPrefix without AnchoredFwd prefix"),
-            },
-            FindAll::FwdLbPrefix => match &self.prefix {
-                Some(prefix::PrefixKind::AnchoredFwdLb(fp)) => {
-                    self.is_match_fwd_lb_prefix(fp, input)
-                }
-                _ => unreachable!("FwdLbPrefix without AnchoredFwdLb prefix"),
-            },
+            FindAll::Bounded |
+            FindAll::FwdPrefix | FindAll::FwdLbPrefix => self.is_match_fwd_ts(input),
         }
     }
 }

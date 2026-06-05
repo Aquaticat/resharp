@@ -689,23 +689,4 @@ impl Regex {
         }
         Ok(matches_buf.clone())
     }
-
-    pub(crate) fn is_match_fwd_bounded(&self, input: &[u8]) -> Result<bool, Error> {
-        let crate::RegexInner {
-            b,
-            bounded,
-            matches: matches_buf,
-            ..
-        } = &mut *self.inner.lock().unwrap();
-        let bounded = bounded.as_mut().unwrap();
-        matches_buf.clear();
-        let found = match &bounded.prefix {
-            Some(p) if p.is_literal() => {
-                bdfa_scan::<{ Prefix::Literal as u8 }, true>(bounded, b, input, matches_buf)?
-            }
-            Some(_) => bdfa_scan::<{ Prefix::Search as u8 }, true>(bounded, b, input, matches_buf)?,
-            None => bdfa_scan::<{ Prefix::None as u8 }, true>(bounded, b, input, matches_buf)?,
-        };
-        Ok(found)
-    }
 }

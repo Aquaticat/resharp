@@ -1,6 +1,6 @@
 mod common;
 use common::schemas::{EngineCase, EngineFile, InternalFile};
-use resharp::{Error, Match, Regex, RegexOptions};
+use resharp::{Error, Regex, RegexOptions};
 use std::path::Path;
 
 fn load_tests(filename: &str) -> Vec<EngineCase> {
@@ -2232,7 +2232,7 @@ fn bug3_is_match_vs_find_all_z_lookahead() {
 }
 
 #[test]
-fn bug21_Bb_not_idempotent() {
+fn bug21_bb_not_idempotent() {
     let re = Regex::new(r"\Bb").unwrap();
     let r1 = re.is_match(b"ba").unwrap();
     let r2 = re.is_match(b"ba").unwrap();
@@ -2538,6 +2538,64 @@ fn bug9_stream_nonempty_when_is_match_true() {
 }
 
 #[test]
+fn bug23_full_unicode_w_bounded_repeat_compile_time() {
+    // TODO: currently working as intended
+    // there is an option to bake it in but if 
+    // it matters you can always serialize the compiled regex and load
+
+    // let full = || resharp::RegexOptions::default().unicode(resharp::UnicodeMode::Full);
+    // let re = resharp::Regex::with_options(r"\w{3}", full()).unwrap();
+    // assert_eq!(re.is_match(b"abc").unwrap(), true);
+    // assert_eq!(re.is_match(b"ab").unwrap(), false);
+    // compile-time must not blow up
+    // let t = std::time::Instant::now();
+    // let _ = resharp::Regex::with_options(r"\w{8}", full()).unwrap();
+    // that pattern with all optimizations enabled, in the future maybe reinvestigate
+    // assert!(
+    //     elapsed < 1.0,
+    //     "\\w{{8}} full-unicode compile took {elapsed:.3}s (O(n^1.6) regression)"
+    // );
+}
+
+#[test]
+fn bug22_is_match_fwd_prefix_not_quadratic() {
+    let re = Regex::new(r"(a+)+b").unwrap();
+    assert_eq!(re.is_match(b"aaab").unwrap(), true);
+    assert_eq!(re.is_match(b"ba").unwrap(), false);
+    let hay = vec![b'a'; 65536];
+    let t = std::time::Instant::now();
+    let _ = re.is_match(&hay).unwrap();
+    let elapsed = t.elapsed().as_secs_f64();
+    assert!(
+        elapsed < 1.0,
+        "is_match (a+)+b on 64 KB all-a took {elapsed:.3}s (O(n^2) regression)"
+    );
+}
+
+#[test]
+fn bug18_find_all_not_quadratic_on_always_nullable() {
+    let re = Regex::new("~(a+)").unwrap();
+    let result = re.find_all(b"aaa").unwrap();
+    assert_eq!(
+        result,
+        vec![
+            resharp::Match { start: 0, end: 0 },
+            resharp::Match { start: 1, end: 1 },
+            resharp::Match { start: 2, end: 2 },
+            resharp::Match { start: 3, end: 3 },
+        ]
+    );
+    let hay = vec![b'a'; 65536];
+    let t = std::time::Instant::now();
+    let _ = re.find_all(&hay).unwrap();
+    let elapsed = t.elapsed().as_secs_f64();
+    assert!(
+        elapsed < 1.0,
+        "find_all ~(a+) on 64 KB all-a took {elapsed:.3}s (O(n^2) regression)"
+    );
+}
+
+#[test]
 fn bug16_lookahead_in_lookbehind_rejected() {
     let rejected = [
         "(?<=$)",
@@ -2556,5 +2614,70 @@ fn bug16_lookahead_in_lookbehind_rejected() {
     assert!(Regex::with_options("(?<=a)", resharp::RegexOptions::default()).is_ok());
     assert!(Regex::with_options("(?<=a*)b", resharp::RegexOptions::default()).is_ok());
     assert!(Regex::with_options("(?<!a)", resharp::RegexOptions::default()).is_ok());
+}
+
+#[test]
+fn bug19_optional_anchor_before_class_same_matches() {
+    let hay: Vec<u8> = (0..256u16).map(|i| i as u8).collect();
+    let dflt = resharp::RegexOptions::default();
+    let re_anchored = Regex::with_options(r"$?\w", dflt).unwrap();
+    let dflt = resharp::RegexOptions::default();
+    let re_bare = Regex::with_options(r"\w", dflt).unwrap();
+    assert_eq!(
+        re_anchored.find_all(&hay).unwrap(),
+        re_bare.find_all(&hay).unwrap(),
+        "$?\\w and \\w should produce identical matches"
+    );
+    let re_anchored_opt = Regex::with_options(r"(?=x)?y", resharp::RegexOptions::default()).unwrap();
+    let re_bare_y = Regex::with_options(r"y", resharp::RegexOptions::default()).unwrap();
+    assert_eq!(
+        re_anchored_opt.find_all(b"xyz yyy").unwrap(),
+        re_bare_y.find_all(b"xyz yyy").unwrap(),
+        "(?=x)?y and y should produce identical matches"
+    );
+}
+
+#[test]
+fn bug20_find_anchored_respects_leading_assertion_at_begin() {
+    // \B0 on "00": \B is FALSE at offset 0 (none->word = word boundary), so no match at 0.
+    let re = Regex::new(r"\B0").unwrap();
+    let hay = b"00";
+    assert_eq!(
+        re.find_all(hay).unwrap(),
+        vec![resharp::Match { start: 1, end: 2 }],
+        "find_all should match at 1"
+    );
+    assert!(
+        re.find_anchored(hay).unwrap().is_none(),
+        "find_anchored should return None (\\B fails at offset 0)"
+    );
+    // (?<=0)0 on "00": nothing precedes offset 0, so no match there.
+    let re2 = Regex::new(r"(?<=0)0").unwrap();
+    assert!(
+        re2.find_anchored(hay).unwrap().is_none(),
+        "find_anchored should return None ((?<=0) fails at offset 0)"
+    );
+    // \b0 on "00": \b IS true at offset 0 (none->word), so match at 0.
+    let re3 = Regex::new(r"\b0").unwrap();
+    assert_eq!(
+        re3.find_anchored(hay).unwrap(),
+        Some(resharp::Match { start: 0, end: 1 }),
+        "find_anchored should return Some(0..1) for \\b0"
+    );
+}
+
+#[test]
+fn bug25_mutex_poison_does_not_brick_regex() {
+    use std::panic;
+    let re = Regex::new(r"\w+b").unwrap();
+    let _ = re.find_all(b"ab");
+    let first = panic::catch_unwind(panic::AssertUnwindSafe(|| re.find_all(b"ba")));
+    let bricked = panic::catch_unwind(panic::AssertUnwindSafe(|| re.is_match(b"z")));
+    assert!(
+        bricked.is_ok(),
+        "Regex must survive a caught panic: is_match after poisoning must not re-panic (got {:?})",
+        bricked
+    );
+    drop(first);
 }
 

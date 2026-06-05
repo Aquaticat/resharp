@@ -1312,6 +1312,7 @@ impl LDFA {
         self.collect_rev_inner::<false>(b, start_pos, data, nulls)
     }
 
+    #[allow(dead_code)]
     pub fn collect_rev_first(
         &mut self,
         b: &mut RegexBuilder,
@@ -2139,35 +2140,6 @@ fn scan_fwd<const SKIP: bool>(
         }
     }
     (l_state, l_pos, max_end, false)
-}
-
-pub fn ensure_capacity(
-    effects_id: &mut Vec<u16>,
-    center_effect_id: &mut Vec<u16>,
-    mt_log: usize,
-    center_table: &mut Vec<u32>,
-    skip_ids: &mut Vec<u8>,
-    state_id: u16,
-) {
-    let cap = state_id as usize + 1;
-    if cap > effects_id.len() {
-        let new_len = effects_id.len().max(4) * 2;
-        let new_len = new_len.max(cap);
-        effects_id.resize(new_len, 0u16);
-        center_effect_id.resize(new_len, EID_NONE as u16);
-    }
-    let stride = 1usize << mt_log;
-    let needed = cap * stride;
-    if needed > center_table.len() {
-        let new_len = center_table.len().max(4) * 2;
-        let new_len = new_len.max(needed);
-        center_table.resize(new_len, DFA_MISSING.into());
-    }
-    if cap > skip_ids.len() {
-        let new_len = skip_ids.len().max(4) * 2;
-        let new_len = new_len.max(cap);
-        skip_ids.resize(new_len, 0u8);
-    }
 }
 
 fn register_state(
