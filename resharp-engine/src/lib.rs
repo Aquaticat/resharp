@@ -839,7 +839,7 @@ fn ensure_supported_rec(
             }
             ensure_supported_rec(b, node.left(b), at_start, strict_lb_start)
         }
-        Kind::Counted => ensure_supported_rec(b, node.left(b), at_start, strict_lb_start),
+        Kind::Ordered => ensure_supported_rec(b, node.left(b), at_start, strict_lb_start),
         Kind::Compl => ensure_supported_rec(b, node.left(b), at_start, strict_lb_start),
         Kind::Lookbehind => {
             let prev = node.right(b);
@@ -893,7 +893,7 @@ fn ensure_begin_leading(
             ensure_begin_leading(b, node.left(b), at_start)?;
             ensure_begin_leading(b, node.right(b), at_start)
         }
-        Kind::Star | Kind::Counted => ensure_begin_leading(b, node.left(b), false),
+        Kind::Star | Kind::Ordered => ensure_begin_leading(b, node.left(b), false),
         Kind::Compl => Ok(()),
         Kind::Lookbehind | Kind::Lookahead => Ok(()),
     }
@@ -1098,10 +1098,11 @@ impl Regex {
             };
 
         // lots of conditions when something else is better.. possibly removing it entirely
-        let use_bounded = false && !has_fwd_prefix
+        let use_bounded = !has_fwd_prefix
             && max_length.is_some()
             && max_len <= 100
             && !b.contains_lookbehind(node)
+            && !node.contains_lookahead(&b)
             && !b.contains_anchors(node)
             && pattern_len <= 150 // a guess..
             && !empty_nullable;

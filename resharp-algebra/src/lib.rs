@@ -164,7 +164,7 @@ pub enum Kind {
     Lookbehind,
     Lookahead,
     Inter,
-    Counted,
+    Ordered,
 }
 
 #[derive(Eq, Hash, PartialEq, Clone)]
@@ -969,7 +969,7 @@ impl RegexBuilder {
                     }
                 }
             }
-            Kind::Counted => {
+            Kind::Ordered => {
                 let packed = self.get_extra(node_id);
                 let best = packed >> 16;
                 if best > 0 {
@@ -1073,7 +1073,7 @@ impl RegexBuilder {
             Kind::Lookahead => {
                 self.get_min_max_length(node_id.right(self).missing_to_eps())
             }
-            Kind::Counted => self.get_min_max_length(node_id.left(self)),
+            Kind::Ordered => self.get_min_max_length(node_id.left(self)),
             Kind::Star | Kind::Compl => (0, u32::MAX),
             Kind::Lookbehind => self.get_min_max_length(node_id.right(self).missing_to_eps()),
         }
@@ -1114,7 +1114,7 @@ impl RegexBuilder {
                 let prev = node_id.right(self).missing_to_eps();
                 self.get_fixed_length(prev)
             }
-            Kind::Counted => self.get_fixed_length(node_id.left(self)),
+            Kind::Ordered => self.get_fixed_length(node_id.left(self)),
             Kind::Star | Kind::Compl => None,
         }
     }
@@ -1134,7 +1134,7 @@ impl RegexBuilder {
                 .get_min_length_only(node_id.left(self))
                 .max(self.get_min_length_only(node_id.right(self))),
             Kind::Star | Kind::Lookbehind | Kind::Lookahead => 0,
-            Kind::Counted => self.get_min_length_only(node_id.left(self)),
+            Kind::Ordered => self.get_min_length_only(node_id.left(self)),
             Kind::Compl => {
                 if self.nullability(node_id.left(self)) == Nullability::ALWAYS {
                     1
@@ -1490,7 +1490,7 @@ impl RegexBuilder {
                     la
                 }
             }
-            Kind::Counted => {
+            Kind::Ordered => {
                 let body = node_id.left(self);
                 let chain = node_id.right(self);
                 let packed = self.get_extra(node_id);
@@ -1512,7 +1512,7 @@ impl RegexBuilder {
                         mid_best
                     };
                     let packed = (final_best as u32) << 16 | new_step as u32;
-                    b.mk_counted(new_body, chain, packed)
+                    b.mk_ordered(new_body, chain, packed)
                 })
             }
             Kind::Begin | Kind::End => TRegexId::BOT,
@@ -1709,7 +1709,7 @@ impl RegexBuilder {
                 });
                 self.init_metadata(node_id, meta_id);
             }
-            Kind::Counted => {
+            Kind::Ordered => {
                 let best = inst.extra >> 16;
                 let (null, nulls) = if best > 0 {
                     let mut ns = BTreeSet::new();
@@ -1915,7 +1915,7 @@ impl RegexBuilder {
     pub(crate) fn get_lookahead_inner(&self, lookahead_node_id: NodeId) -> NodeId {
         debug_assert!(matches!(
             self.get_kind(lookahead_node_id),
-            Kind::Lookahead | Kind::Counted
+            Kind::Lookahead | Kind::Ordered
         ));
         lookahead_node_id.left(self)
     }
@@ -1929,7 +1929,7 @@ impl RegexBuilder {
         debug_assert!(
             matches!(
                 self.get_kind(lookahead_node_id),
-                Kind::Lookahead | Kind::Counted
+                Kind::Lookahead | Kind::Ordered
             ),
             "not lookahead/counted: {:?}",
             self.pp(lookahead_node_id)
@@ -2357,7 +2357,7 @@ impl RegexBuilder {
                 let rev_inner = self.reverse(inner_id)?;
                 self.mk_lookbehind(rev_inner, rev_tail)
             }
-            Kind::Counted => {
+            Kind::Ordered => {
                 return Err(ResharpError::UnsupportedPattern);
             }
         };
@@ -3472,7 +3472,7 @@ impl RegexBuilder {
         self.get_node_id(key)
     }
 
-    pub fn mk_counted(&mut self, body: NodeId, chain: NodeId, packed: u32) -> NodeId {
+    pub fn mk_ordered(&mut self, body: NodeId, chain: NodeId, packed: u32) -> NodeId {
         let has_match = (packed >> 16) > 0;
         if body == NodeId::BOT && chain == NodeId::MISSING && !has_match {
             return NodeId::BOT;
@@ -3483,7 +3483,7 @@ impl RegexBuilder {
         );
         let chain = self.prune_counted_chain(body, chain);
         let key = NodeKey {
-            kind: Kind::Counted,
+            kind: Kind::Ordered,
             left: body,
             right: chain,
             extra: packed,
@@ -3768,7 +3768,7 @@ impl RegexBuilder {
                     body_null.and(self.nullability_emptystring(la_tail))
                 }
             }
-            Kind::Counted => self.nullability_emptystring(node_id.left(self)),
+            Kind::Ordered => self.nullability_emptystring(node_id.left(self)),
         }
     }
 
@@ -3880,7 +3880,7 @@ impl RegexBuilder {
                 };
                 self.mk_lookbehind(ni, np)
             }
-            Kind::Counted => node,
+            Kind::Ordered => node,
         };
         memo.insert(node, result);
         Ok(result)
@@ -4094,7 +4094,7 @@ impl RegexBuilder {
                     write!(s, "❯")
                 }
             }
-            Kind::Counted => {
+            Kind::Ordered => {
                 let body = node_id.left(self);
                 let packed = self.get_extra(node_id);
                 let step = packed & 0xFFFF;
@@ -4525,10 +4525,10 @@ impl RegexBuilder {
                 self.mk_lookahead_internal(body, tail, lrel)
             }
             Kind::Begin => NodeId::BOT,
-            Kind::Counted => {
+            Kind::Ordered => {
                 let body = self.prune_rec::<FWD>(l, memo);
                 let chain = self.prune_rec::<FWD>(r, memo);
-                self.mk_counted(body, chain, self.get_extra(node_id))
+                self.mk_ordered(body, chain, self.get_extra(node_id))
             }
             Kind::End | Kind::Pred => node_id,
             Kind::Star => {
@@ -4755,7 +4755,7 @@ impl RegexBuilder {
                 let rw = self.mk_inter(elim_l, elim_r);
                 Some(rw)
             }
-            Kind::Counted => None,
+            Kind::Ordered => None,
         }
     }
 

@@ -145,7 +145,7 @@ pub fn collect_sets(b: &RegexBuilder, start_id: NodeId) -> HashSet<TSetId> {
                 stack.push(node_id.left(b));
                 stack.push(node_id.right(b));
             }
-            Kind::Lookahead | Kind::Lookbehind | Kind::Counted => {
+            Kind::Lookahead | Kind::Lookbehind | Kind::Ordered => {
                 stack.push(node_id.left(b));
                 stack.push(node_id.right(b));
             }

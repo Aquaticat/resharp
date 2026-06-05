@@ -48,7 +48,7 @@ pub(crate) struct BDFA {
 
 impl BDFA {
     pub fn new(b: &mut RegexBuilder, pattern_node: NodeId) -> Result<Self, Error> {
-        let initial_node = b.mk_counted(pattern_node, NodeId::MISSING, 0);
+        let initial_node = b.mk_ordered(pattern_node, NodeId::MISSING, 0);
         let sets = collect_sets(b, initial_node);
         let minterms = PartitionTree::generate_minterms(sets, b.solver());
         let minterms_lookup = PartitionTree::minterms_lookup(&minterms, b.solver());
@@ -262,7 +262,7 @@ impl BDFA {
         let mut match_best = 0u32;
         let mut cur = node;
         while cur.0 > NodeId::BOT.0 {
-            debug_assert_eq!(b.get_kind(cur), Kind::Counted);
+            debug_assert_eq!(b.get_kind(cur), Kind::Ordered);
             let body = cur.left(b);
             if body == NodeId::BOT {
                 let best = Self::counted_best(cur, b);
@@ -311,7 +311,7 @@ impl BDFA {
         let mut result = Vec::new();
         let mut cur = head;
         while cur.0 > NodeId::BOT.0 {
-            debug_assert_eq!(b.get_kind(cur), Kind::Counted);
+            debug_assert_eq!(b.get_kind(cur), Kind::Ordered);
             let chain = cur.right(b);
             let body = cur.left(b);
             if body == NodeId::BOT {
@@ -336,7 +336,7 @@ impl BDFA {
         for &node in candidates.iter().rev() {
             let body = node.left(b);
             let packed = b.get_extra(node);
-            let next = b.mk_counted(body, chain, packed);
+            let next = b.mk_ordered(body, chain, packed);
             if next != NodeId::BOT {
                 chain = next;
             }
