@@ -109,6 +109,7 @@ struct Key {
 pub struct NullsBuilder {
     cache: FxHashMap<Nulls, NullsId>,
     created: FxHashMap<Key, NullsId>,
+    add_rel_cache: FxHashMap<(NullsId, u32), NullsId>,
     pub array: Vec<Nulls>,
 }
 
@@ -124,6 +125,7 @@ impl NullsBuilder {
             cache: FxHashMap::default(),
             array: Vec::new(),
             created: FxHashMap::default(),
+            add_rel_cache: FxHashMap::default(),
         };
         let _ = inst.init(BTreeSet::new());
         let _center = inst.init1(NullState::new0(Nullability::CENTER));
@@ -293,17 +295,29 @@ impl NullsBuilder {
         NullsId::EMPTY
     }
 
+    pub fn max_rel(&self, set_id: NullsId) -> u32 {
+        self.get_set_ref(set_id).iter().next().map_or(0, |ns| ns.rel)
+    }
+
+    pub fn min_rel(&self, set_id: NullsId) -> u32 {
+        self.get_set_ref(set_id).iter().next_back().map_or(0, |ns| ns.rel)
+    }
+
     #[inline]
     pub fn add_rel(&mut self, set_id: NullsId, rel: u32) -> NullsId {
         if rel == 0 || rel == u32::MAX {
             return set_id;
+        }
+        if let Some(&cached) = self.add_rel_cache.get(&(set_id, rel)) {
+            return cached;
         }
         let res = self.get_set_ref(set_id).clone();
         let with_rel = res
             .iter()
             .map(|v| NullState::new(v.mask, v.rel + rel))
             .collect();
-
-        self.get_id(with_rel)
+        let result = self.get_id(with_rel);
+        self.add_rel_cache.insert((set_id, rel), result);
+        result
     }
 }

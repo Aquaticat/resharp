@@ -958,9 +958,12 @@ impl RegexBuilder {
             Kind::Lookahead => {
                 let la_inner = self.get_lookahead_inner(node_id);
                 if self.is_nullable(la_inner, mask) {
-                    let rel = self.get_lookahead_rel(node_id);
-                    if rel != u32::MAX {
-                        self.get_nulls(pending_rel + rel, mask, acc, la_inner);
+                    let lo = self.get_lookahead_rel_lo(node_id);
+                    let hi = self.get_lookahead_rel(node_id);
+                    if hi != u32::MAX {
+                        for rel in lo..=hi {
+                            self.get_nulls(pending_rel + rel, mask, acc, la_inner);
+                        }
                     }
                     // tail only contributes when body is sat
                     let la_tail = self.get_lookahead_tail(node_id);
@@ -1390,6 +1393,11 @@ impl RegexBuilder {
                 let la_tail = self.get_lookahead_tail(node_id);
                 let la_body = node_id.left(self);
                 let rel = self.get_lookahead_rel(node_id);
+                let cur_rels = if rel == u32::MAX {
+                    NullsId(u32::MAX)
+                } else {
+                    NullsId(self.get_extra(node_id))
+                };
 
                 if self.is_nullable(la_body, mask) {
                     // nullabilty is taken once, just keep the body
@@ -1454,13 +1462,28 @@ impl RegexBuilder {
                     return Err(ResharpError::AnchorLimit);
                 }
 
+                let new_rels = if cur_rels.0 == u32::MAX {
+                    NullsId(u32::MAX)
+                } else {
+                    self.mb.nb.add_rel(cur_rels, 1)
+                };
+                let single_rel = if new_rels.0 == u32::MAX {
+                    Some(u32::MAX)
+                } else {
+                    let lo = self.mb.nb.min_rel(new_rels);
+                    let hi = self.mb.nb.max_rel(new_rels);
+                    if lo == hi { Some(hi) } else { None }
+                };
+
                 let la = {
                     let this = &mut *self;
-                    let rel = rel.saturating_add(1);
                     this.mk_binary(
                         la_body_der,
                         la_tail_der,
-                        &mut (|b, left, right| b.mk_lookahead_internal(left, right, rel)),
+                        &mut (|b, left, right| match single_rel {
+                            Some(r) => b.mk_lookahead_internal(left, right, r),
+                            None => b.mk_lookahead_nid(left, right, new_rels),
+                        }),
                     )
                 };
 
@@ -1471,11 +1494,13 @@ impl RegexBuilder {
                     let look_only = {
                         let this = &mut *self;
                         let right = TRegexId::MISSING;
-                        let rel = rel.saturating_add(1);
                         this.mk_binary(
                             la_body_der,
                             right,
-                            &mut (|b, left, right| b.mk_lookahead_internal(left, right, rel)),
+                            &mut (|b, left, right| match single_rel {
+                                Some(r) => b.mk_lookahead_internal(left, right, r),
+                                None => b.mk_lookahead_nid(left, right, new_rels),
+                            }),
                         )
                     };
                     {
@@ -1683,7 +1708,16 @@ impl RegexBuilder {
                 let mut nulls = if inst.extra == u32::MAX {
                     NullsId::EMPTY
                 } else {
-                    self.mb.nb.add_rel(self.get_nulls_id(inst.left), inst.extra)
+                    let rels = NullsId(inst.extra);
+                    let body_nulls = self.get_nulls_id(inst.left);
+                    let rel_vals: Vec<u32> =
+                        self.mb.nb.get_set_ref(rels).iter().rev().map(|ns| ns.rel).collect();
+                    let mut combined = NullsId::EMPTY;
+                    for &rel in &rel_vals {
+                        let part = self.mb.nb.add_rel(body_nulls, rel);
+                        combined = self.mb.nb.or_id(combined, part);
+                    }
+                    combined
                 };
                 let left_nullability = inst.left.nullability(self);
                 let nulls_right = self.get_nulls_id_w_mask(inst.right, left_nullability);
@@ -1934,7 +1968,22 @@ impl RegexBuilder {
             "not lookahead/counted: {:?}",
             self.pp(lookahead_node_id)
         );
-        self.get_extra(lookahead_node_id)
+        let extra = self.get_extra(lookahead_node_id);
+        if extra == u32::MAX {
+            u32::MAX
+        } else {
+            self.mb.nb.max_rel(NullsId(extra))
+        }
+    }
+    #[inline]
+    pub(crate) fn get_lookahead_rel_lo(&self, lookahead_node_id: NodeId) -> u32 {
+        debug_assert!(lookahead_node_id.is_lookahead(self));
+        let extra = self.get_extra(lookahead_node_id);
+        if extra == u32::MAX {
+            u32::MAX
+        } else {
+            self.mb.nb.min_rel(NullsId(extra))
+        }
     }
     #[inline]
     pub fn get_lookbehind_inner(&self, lookbehind_node_id: NodeId) -> NodeId {
@@ -2660,15 +2709,26 @@ impl RegexBuilder {
         if left.is_lookahead(self) && right.is_lookahead(self) {
             let lb = left.left(self);
             let lt = left.right(self);
-            let lrel = left.extra(self);
+            let lrel_extra = left.extra(self);
 
             let rb = right.left(self);
             let rt = right.right(self);
-            let rrel = right.extra(self);
+            let rrel_extra = right.extra(self);
 
-            if lrel == rrel && lt.is_missing() && rt.is_missing() {
+            if lrel_extra == rrel_extra && lt.is_missing() && rt.is_missing() {
                 let unioned = self.mk_union(lb, rb);
-                let node = self.mk_lookahead_internal(unioned, NodeId::MISSING, lrel);
+                let node = if lrel_extra == u32::MAX {
+                    self.mk_lookahead_internal(unioned, NodeId::MISSING, u32::MAX)
+                } else {
+                    let rels = NullsId(lrel_extra);
+                    let lo = self.mb.nb.min_rel(rels);
+                    let hi = self.mb.nb.max_rel(rels);
+                    if lo == hi {
+                        self.mk_lookahead_internal(unioned, NodeId::MISSING, hi)
+                    } else {
+                        self.mk_lookahead_nid(unioned, NodeId::MISSING, rels)
+                    }
+                };
                 return Some(node);
             }
         }
@@ -3373,11 +3433,16 @@ impl RegexBuilder {
 
     // rel max = carries no nullability, can potentially rw to intersection
     pub fn mk_lookahead_internal(&mut self, la_body: NodeId, la_tail: NodeId, rel: u32) -> NodeId {
+        let extra = if rel == u32::MAX {
+            u32::MAX
+        } else {
+            self.mb.nb.add_rel(NullsId::ALWAYS0, rel).0
+        };
         let key = NodeKey {
             kind: Kind::Lookahead,
             left: la_body,
             right: la_tail,
-            extra: rel,
+            extra,
         };
         if let Some(id) = self.key_is_created(&key) {
             return *id;
@@ -3469,6 +3534,35 @@ impl RegexBuilder {
             }
         }
 
+        self.get_node_id(key)
+    }
+
+    pub fn mk_lookahead_range(&mut self, la_body: NodeId, la_tail: NodeId, lo: u32, hi: u32) -> NodeId {
+        if hi == u32::MAX {
+            return self.mk_lookahead_internal(la_body, la_tail, u32::MAX);
+        }
+        debug_assert!(lo <= hi);
+        let mut rels = self.mb.nb.add_rel(NullsId::ALWAYS0, lo);
+        for k in lo + 1..=hi {
+            let part = self.mb.nb.add_rel(NullsId::ALWAYS0, k);
+            rels = self.mb.nb.or_id(rels, part);
+        }
+        self.mk_lookahead_nid(la_body, la_tail, rels)
+    }
+
+    pub fn mk_lookahead_nid(&mut self, la_body: NodeId, la_tail: NodeId, rels: NullsId) -> NodeId {
+        if la_body == NodeId::BOT || la_tail == NodeId::BOT {
+            return NodeId::BOT;
+        }
+        let key = NodeKey {
+            kind: Kind::Lookahead,
+            left: la_body,
+            right: la_tail,
+            extra: rels.0,
+        };
+        if let Some(id) = self.key_is_created(&key) {
+            return *id;
+        }
         self.get_node_id(key)
     }
 
@@ -4076,15 +4170,22 @@ impl RegexBuilder {
                 write!(s, "(?=")?;
                 self.ppw(s, inner)?;
                 write!(s, ")")?;
-                if self.get_lookahead_rel(node_id) != 0 {
-                    write!(s, "{{")?;
-                    let rel = self.get_lookahead_rel(node_id);
-                    if rel == u32::MAX {
-                        write!(s, "∅")?;
-                    } else {
-                        write!(s, "{}", rel)?;
+                let extra = self.get_extra(node_id);
+                if extra == u32::MAX {
+                    write!(s, "{{∅}}")?;
+                } else {
+                    let rels = NullsId(extra);
+                    let hi = self.mb.nb.max_rel(rels);
+                    let lo = self.mb.nb.min_rel(rels);
+                    if hi != 0 {
+                        write!(s, "{{")?;
+                        if lo == hi {
+                            write!(s, "{hi}")?;
+                        } else {
+                            write!(s, "{lo}..{hi}")?;
+                        }
+                        write!(s, "}}")?;
                     }
-                    write!(s, "}}")?;
                 }
                 if node_id.right(self) == NodeId::MISSING {
                     Ok(())
@@ -4460,31 +4561,62 @@ impl RegexBuilder {
                 }
 
                 if FWD {
-                    // min rel per body for pure lookaheads (la_tail MISSING)
+                    // min lo per body for pure lookaheads (la_tail MISSING)
                     let mut best: FxHashMap<NodeId, u32> = FxHashMap::default();
                     for &p in &parts {
                         if p.is_lookahead(self) && self.get_lookahead_tail(p) == NodeId::MISSING {
                             let body = self.get_lookahead_inner(p);
-                            let rel = self.get_lookahead_rel(p);
+                            let lo = self.get_lookahead_rel_lo(p);
                             best.entry(body)
-                                .and_modify(|r| *r = (*r).min(rel))
-                                .or_insert(rel);
+                                .and_modify(|r| *r = (*r).min(lo))
+                                .or_insert(lo);
                         }
                     }
                     parts.iter().rev().fold(NodeId::BOT, |acc, &p| {
                         if p.is_lookahead(self) && self.get_lookahead_tail(p) == NodeId::MISSING {
                             let body = self.get_lookahead_inner(p);
-                            if self.get_lookahead_rel(p) != best[&body] {
+                            if self.get_lookahead_rel_lo(p) != best[&body] {
                                 return acc;
                             }
                         }
                         self.mk_union(p, acc)
                     })
                 } else {
-                    parts
-                        .iter()
-                        .rev()
-                        .fold(NodeId::BOT, |acc, &p| self.mk_union(p, acc))
+                    let mut rels_map: FxHashMap<NodeId, NullsId> = FxHashMap::default();
+                    for &p in &parts {
+                        if p.is_lookahead(self)
+                            && self.get_lookahead_tail(p) == NodeId::MISSING
+                            && self.get_extra(p) != u32::MAX
+                        {
+                            let body = self.get_lookahead_inner(p);
+                            let rels = NullsId(self.get_extra(p));
+                            rels_map
+                                .entry(body)
+                                .and_modify(|r| *r = self.mb.nb.or_id(*r, rels))
+                                .or_insert(rels);
+                        }
+                    }
+                    let mut la_acc = NodeId::BOT;
+                    for (body, rels) in rels_map {
+                        let lo = self.mb.nb.min_rel(rels);
+                        let hi = self.mb.nb.max_rel(rels);
+                        let node = if lo == hi {
+                            self.mk_lookahead_internal(body, NodeId::MISSING, hi)
+                        } else {
+                            self.mk_lookahead_nid(body, NodeId::MISSING, rels)
+                        };
+                        la_acc = self.mk_union(node, la_acc);
+                    }
+                    parts.iter().rev().fold(la_acc, |acc, &p| {
+                        if p.is_lookahead(self)
+                            && self.get_lookahead_tail(p) == NodeId::MISSING
+                            && self.get_extra(p) != u32::MAX
+                        {
+                            acc
+                        } else {
+                            self.mk_union(p, acc)
+                        }
+                    })
                 }
             }
             Kind::Concat => {
@@ -4513,7 +4645,7 @@ impl RegexBuilder {
                 self.mk_compl(l)
             }
             Kind::Lookahead => {
-                let lrel = self.get_lookahead_rel(node_id);
+                let extra = self.get_extra(node_id);
                 let body = self.strip_la_body_end(self.get_lookahead_inner(node_id));
                 let body = self.prune_rec::<FWD>(body, memo);
 
@@ -4522,7 +4654,18 @@ impl RegexBuilder {
                 } else {
                     self.prune_rec::<FWD>(self.get_lookahead_tail(node_id), memo)
                 };
-                self.mk_lookahead_internal(body, tail, lrel)
+                if extra == u32::MAX {
+                    self.mk_lookahead_internal(body, tail, u32::MAX)
+                } else {
+                    let rels = NullsId(extra);
+                    let lo = self.mb.nb.min_rel(rels);
+                    let hi = self.mb.nb.max_rel(rels);
+                    if lo == hi {
+                        self.mk_lookahead_internal(body, tail, hi)
+                    } else {
+                        self.mk_lookahead_nid(body, tail, rels)
+                    }
+                }
             }
             Kind::Begin => NodeId::BOT,
             Kind::Ordered => {

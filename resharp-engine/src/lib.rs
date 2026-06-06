@@ -1005,7 +1005,14 @@ impl Regex {
 
         let is_empty_lang = node == NodeId::BOT;
         // TODO: make it configurable to actually check and reject empty lang entriely
-        let lb_stripped = fwd_start != node;
+        let body_after_begin = {
+            let mut cur = node;
+            while b.get_kind(cur) == resharp_algebra::Kind::Concat && cur.left(&b) == NodeId::BEGIN {
+                cur = cur.right(&b);
+            }
+            cur
+        };
+        let lb_stripped = fwd_start != body_after_begin;
         let fwd_begin_anchored = b.is_begin_anchored(node) && !lb_stripped;
         let rev_trivial = b.nullability(ts_rev_start) == Nullability::ALWAYS;
         let rev_end_anchored = !fwd_end_nullable && b.is_begin_anchored(ts_rev_start);

@@ -1,0 +1,3334 @@
+// ===== express/lib/application.js (4.18.2) =====
+/*!
+ * express
+ * Copyright(c) 2009-2013 TJ Holowaychuk
+ * Copyright(c) 2013 Roman Shtylman
+ * Copyright(c) 2014-2015 Douglas Christopher Wilson
+ * MIT Licensed
+ */
+
+'use strict';
+
+/**
+ * Module dependencies.
+ * @private
+ */
+
+var finalhandler = require('finalhandler');
+var Router = require('./router');
+var methods = require('methods');
+var middleware = require('./middleware/init');
+var query = require('./middleware/query');
+var debug = require('debug')('express:application');
+var View = require('./view');
+var http = require('http');
+var compileETag = require('./utils').compileETag;
+var compileQueryParser = require('./utils').compileQueryParser;
+var compileTrust = require('./utils').compileTrust;
+var deprecate = require('depd')('express');
+var flatten = require('array-flatten');
+var merge = require('utils-merge');
+var resolve = require('path').resolve;
+var setPrototypeOf = require('setprototypeof')
+
+/**
+ * Module variables.
+ * @private
+ */
+
+var hasOwnProperty = Object.prototype.hasOwnProperty
+var slice = Array.prototype.slice;
+
+/**
+ * Application prototype.
+ */
+
+var app = exports = module.exports = {};
+
+/**
+ * Variable for trust proxy inheritance back-compat
+ * @private
+ */
+
+var trustProxyDefaultSymbol = '@@symbol:trust_proxy_default';
+
+/**
+ * Initialize the server.
+ *
+ *   - setup default configuration
+ *   - setup default middleware
+ *   - setup route reflection methods
+ *
+ * @private
+ */
+
+app.init = function init() {
+  this.cache = {};
+  this.engines = {};
+  this.settings = {};
+
+  this.defaultConfiguration();
+};
+
+/**
+ * Initialize application configuration.
+ * @private
+ */
+
+app.defaultConfiguration = function defaultConfiguration() {
+  var env = process.env.NODE_ENV || 'development';
+
+  // default settings
+  this.enable('x-powered-by');
+  this.set('etag', 'weak');
+  this.set('env', env);
+  this.set('query parser', 'extended');
+  this.set('subdomain offset', 2);
+  this.set('trust proxy', false);
+
+  // trust proxy inherit back-compat
+  Object.defineProperty(this.settings, trustProxyDefaultSymbol, {
+    configurable: true,
+    value: true
+  });
+
+  debug('booting in %s mode', env);
+
+  this.on('mount', function onmount(parent) {
+    // inherit trust proxy
+    if (this.settings[trustProxyDefaultSymbol] === true
+      && typeof parent.settings['trust proxy fn'] === 'function') {
+      delete this.settings['trust proxy'];
+      delete this.settings['trust proxy fn'];
+    }
+
+    // inherit protos
+    setPrototypeOf(this.request, parent.request)
+    setPrototypeOf(this.response, parent.response)
+    setPrototypeOf(this.engines, parent.engines)
+    setPrototypeOf(this.settings, parent.settings)
+  });
+
+  // setup locals
+  this.locals = Object.create(null);
+
+  // top-most app is mounted at /
+  this.mountpath = '/';
+
+  // default locals
+  this.locals.settings = this.settings;
+
+  // default configuration
+  this.set('view', View);
+  this.set('views', resolve('views'));
+  this.set('jsonp callback name', 'callback');
+
+  if (env === 'production') {
+    this.enable('view cache');
+  }
+
+  Object.defineProperty(this, 'router', {
+    get: function() {
+      throw new Error('\'app.router\' is deprecated!\nPlease see the 3.x to 4.x migration guide for details on how to update your app.');
+    }
+  });
+};
+
+/**
+ * lazily adds the base router if it has not yet been added.
+ *
+ * We cannot add the base router in the defaultConfiguration because
+ * it reads app settings which might be set after that has run.
+ *
+ * @private
+ */
+app.lazyrouter = function lazyrouter() {
+  if (!this._router) {
+    this._router = new Router({
+      caseSensitive: this.enabled('case sensitive routing'),
+      strict: this.enabled('strict routing')
+    });
+
+    this._router.use(query(this.get('query parser fn')));
+    this._router.use(middleware.init(this));
+  }
+};
+
+/**
+ * Dispatch a req, res pair into the application. Starts pipeline processing.
+ *
+ * If no callback is provided, then default error handlers will respond
+ * in the event of an error bubbling through the stack.
+ *
+ * @private
+ */
+
+app.handle = function handle(req, res, callback) {
+  var router = this._router;
+
+  // final handler
+  var done = callback || finalhandler(req, res, {
+    env: this.get('env'),
+    onerror: logerror.bind(this)
+  });
+
+  // no routes
+  if (!router) {
+    debug('no routes defined on app');
+    done();
+    return;
+  }
+
+  router.handle(req, res, done);
+};
+
+/**
+ * Proxy `Router#use()` to add middleware to the app router.
+ * See Router#use() documentation for details.
+ *
+ * If the _fn_ parameter is an express app, then it will be
+ * mounted at the _route_ specified.
+ *
+ * @public
+ */
+
+app.use = function use(fn) {
+  var offset = 0;
+  var path = '/';
+
+  // default path to '/'
+  // disambiguate app.use([fn])
+  if (typeof fn !== 'function') {
+    var arg = fn;
+
+    while (Array.isArray(arg) && arg.length !== 0) {
+      arg = arg[0];
+    }
+
+    // first arg is the path
+    if (typeof arg !== 'function') {
+      offset = 1;
+      path = fn;
+    }
+  }
+
+  var fns = flatten(slice.call(arguments, offset));
+
+  if (fns.length === 0) {
+    throw new TypeError('app.use() requires a middleware function')
+  }
+
+  // setup router
+  this.lazyrouter();
+  var router = this._router;
+
+  fns.forEach(function (fn) {
+    // non-express app
+    if (!fn || !fn.handle || !fn.set) {
+      return router.use(path, fn);
+    }
+
+    debug('.use app under %s', path);
+    fn.mountpath = path;
+    fn.parent = this;
+
+    // restore .app property on req and res
+    router.use(path, function mounted_app(req, res, next) {
+      var orig = req.app;
+      fn.handle(req, res, function (err) {
+        setPrototypeOf(req, orig.request)
+        setPrototypeOf(res, orig.response)
+        next(err);
+      });
+    });
+
+    // mounted an app
+    fn.emit('mount', this);
+  }, this);
+
+  return this;
+};
+
+/**
+ * Proxy to the app `Router#route()`
+ * Returns a new `Route` instance for the _path_.
+ *
+ * Routes are isolated middleware stacks for specific paths.
+ * See the Route api docs for details.
+ *
+ * @public
+ */
+
+app.route = function route(path) {
+  this.lazyrouter();
+  return this._router.route(path);
+};
+
+/**
+ * Register the given template engine callback `fn`
+ * as `ext`.
+ *
+ * By default will `require()` the engine based on the
+ * file extension. For example if you try to render
+ * a "foo.ejs" file Express will invoke the following internally:
+ *
+ *     app.engine('ejs', require('ejs').__express);
+ *
+ * For engines that do not provide `.__express` out of the box,
+ * or if you wish to "map" a different extension to the template engine
+ * you may use this method. For example mapping the EJS template engine to
+ * ".html" files:
+ *
+ *     app.engine('html', require('ejs').renderFile);
+ *
+ * In this case EJS provides a `.renderFile()` method with
+ * the same signature that Express expects: `(path, options, callback)`,
+ * though note that it aliases this method as `ejs.__express` internally
+ * so if you're using ".ejs" extensions you don't need to do anything.
+ *
+ * Some template engines do not follow this convention, the
+ * [Consolidate.js](https://github.com/tj/consolidate.js)
+ * library was created to map all of node's popular template
+ * engines to follow this convention, thus allowing them to
+ * work seamlessly within Express.
+ *
+ * @param {String} ext
+ * @param {Function} fn
+ * @return {app} for chaining
+ * @public
+ */
+
+app.engine = function engine(ext, fn) {
+  if (typeof fn !== 'function') {
+    throw new Error('callback function required');
+  }
+
+  // get file extension
+  var extension = ext[0] !== '.'
+    ? '.' + ext
+    : ext;
+
+  // store engine
+  this.engines[extension] = fn;
+
+  return this;
+};
+
+/**
+ * Proxy to `Router#param()` with one added api feature. The _name_ parameter
+ * can be an array of names.
+ *
+ * See the Router#param() docs for more details.
+ *
+ * @param {String|Array} name
+ * @param {Function} fn
+ * @return {app} for chaining
+ * @public
+ */
+
+app.param = function param(name, fn) {
+  this.lazyrouter();
+
+  if (Array.isArray(name)) {
+    for (var i = 0; i < name.length; i++) {
+      this.param(name[i], fn);
+    }
+
+    return this;
+  }
+
+  this._router.param(name, fn);
+
+  return this;
+};
+
+/**
+ * Assign `setting` to `val`, or return `setting`'s value.
+ *
+ *    app.set('foo', 'bar');
+ *    app.set('foo');
+ *    // => "bar"
+ *
+ * Mounted servers inherit their parent server's settings.
+ *
+ * @param {String} setting
+ * @param {*} [val]
+ * @return {Server} for chaining
+ * @public
+ */
+
+app.set = function set(setting, val) {
+  if (arguments.length === 1) {
+    // app.get(setting)
+    var settings = this.settings
+
+    while (settings && settings !== Object.prototype) {
+      if (hasOwnProperty.call(settings, setting)) {
+        return settings[setting]
+      }
+
+      settings = Object.getPrototypeOf(settings)
+    }
+
+    return undefined
+  }
+
+  debug('set "%s" to %o', setting, val);
+
+  // set value
+  this.settings[setting] = val;
+
+  // trigger matched settings
+  switch (setting) {
+    case 'etag':
+      this.set('etag fn', compileETag(val));
+      break;
+    case 'query parser':
+      this.set('query parser fn', compileQueryParser(val));
+      break;
+    case 'trust proxy':
+      this.set('trust proxy fn', compileTrust(val));
+
+      // trust proxy inherit back-compat
+      Object.defineProperty(this.settings, trustProxyDefaultSymbol, {
+        configurable: true,
+        value: false
+      });
+
+      break;
+  }
+
+  return this;
+};
+
+/**
+ * Return the app's absolute pathname
+ * based on the parent(s) that have
+ * mounted it.
+ *
+ * For example if the application was
+ * mounted as "/admin", which itself
+ * was mounted as "/blog" then the
+ * return value would be "/blog/admin".
+ *
+ * @return {String}
+ * @private
+ */
+
+app.path = function path() {
+  return this.parent
+    ? this.parent.path() + this.mountpath
+    : '';
+};
+
+/**
+ * Check if `setting` is enabled (truthy).
+ *
+ *    app.enabled('foo')
+ *    // => false
+ *
+ *    app.enable('foo')
+ *    app.enabled('foo')
+ *    // => true
+ *
+ * @param {String} setting
+ * @return {Boolean}
+ * @public
+ */
+
+app.enabled = function enabled(setting) {
+  return Boolean(this.set(setting));
+};
+
+/**
+ * Check if `setting` is disabled.
+ *
+ *    app.disabled('foo')
+ *    // => true
+ *
+ *    app.enable('foo')
+ *    app.disabled('foo')
+ *    // => false
+ *
+ * @param {String} setting
+ * @return {Boolean}
+ * @public
+ */
+
+app.disabled = function disabled(setting) {
+  return !this.set(setting);
+};
+
+/**
+ * Enable `setting`.
+ *
+ * @param {String} setting
+ * @return {app} for chaining
+ * @public
+ */
+
+app.enable = function enable(setting) {
+  return this.set(setting, true);
+};
+
+/**
+ * Disable `setting`.
+ *
+ * @param {String} setting
+ * @return {app} for chaining
+ * @public
+ */
+
+app.disable = function disable(setting) {
+  return this.set(setting, false);
+};
+
+/**
+ * Delegate `.VERB(...)` calls to `router.VERB(...)`.
+ */
+
+methods.forEach(function(method){
+  app[method] = function(path){
+    if (method === 'get' && arguments.length === 1) {
+      // app.get(setting)
+      return this.set(path);
+    }
+
+    this.lazyrouter();
+
+    var route = this._router.route(path);
+    route[method].apply(route, slice.call(arguments, 1));
+    return this;
+  };
+});
+
+/**
+ * Special-cased "all" method, applying the given route `path`,
+ * middleware, and callback to _every_ HTTP method.
+ *
+ * @param {String} path
+ * @param {Function} ...
+ * @return {app} for chaining
+ * @public
+ */
+
+app.all = function all(path) {
+  this.lazyrouter();
+
+  var route = this._router.route(path);
+  var args = slice.call(arguments, 1);
+
+  for (var i = 0; i < methods.length; i++) {
+    route[methods[i]].apply(route, args);
+  }
+
+  return this;
+};
+
+// del -> delete alias
+
+app.del = deprecate.function(app.delete, 'app.del: Use app.delete instead');
+
+/**
+ * Render the given view `name` name with `options`
+ * and a callback accepting an error and the
+ * rendered template string.
+ *
+ * Example:
+ *
+ *    app.render('email', { name: 'Tobi' }, function(err, html){
+ *      // ...
+ *    })
+ *
+ * @param {String} name
+ * @param {Object|Function} options or fn
+ * @param {Function} callback
+ * @public
+ */
+
+app.render = function render(name, options, callback) {
+  var cache = this.cache;
+  var done = callback;
+  var engines = this.engines;
+  var opts = options;
+  var renderOptions = {};
+  var view;
+
+// ===== express/lib/response.js (4.18.2) =====
+/*!
+ * express
+ * Copyright(c) 2009-2013 TJ Holowaychuk
+ * Copyright(c) 2014-2015 Douglas Christopher Wilson
+ * MIT Licensed
+ */
+
+'use strict';
+
+/**
+ * Module dependencies.
+ * @private
+ */
+
+var Buffer = require('safe-buffer').Buffer
+var contentDisposition = require('content-disposition');
+var createError = require('http-errors')
+var deprecate = require('depd')('express');
+var encodeUrl = require('encodeurl');
+var escapeHtml = require('escape-html');
+var http = require('http');
+var isAbsolute = require('./utils').isAbsolute;
+var onFinished = require('on-finished');
+var path = require('path');
+var statuses = require('statuses')
+var merge = require('utils-merge');
+var sign = require('cookie-signature').sign;
+var normalizeType = require('./utils').normalizeType;
+var normalizeTypes = require('./utils').normalizeTypes;
+var setCharset = require('./utils').setCharset;
+var cookie = require('cookie');
+var send = require('send');
+var extname = path.extname;
+var mime = send.mime;
+var resolve = path.resolve;
+var vary = require('vary');
+
+/**
+ * Response prototype.
+ * @public
+ */
+
+var res = Object.create(http.ServerResponse.prototype)
+
+/**
+ * Module exports.
+ * @public
+ */
+
+module.exports = res
+
+/**
+ * Module variables.
+ * @private
+ */
+
+var charsetRegExp = /;\s*charset\s*=/;
+
+/**
+ * Set status `code`.
+ *
+ * @param {Number} code
+ * @return {ServerResponse}
+ * @public
+ */
+
+res.status = function status(code) {
+  if ((typeof code === 'string' || Math.floor(code) !== code) && code > 99 && code < 1000) {
+    deprecate('res.status(' + JSON.stringify(code) + '): use res.status(' + Math.floor(code) + ') instead')
+  }
+  this.statusCode = code;
+  return this;
+};
+
+/**
+ * Set Link header field with the given `links`.
+ *
+ * Examples:
+ *
+ *    res.links({
+ *      next: 'http://api.example.com/users?page=2',
+ *      last: 'http://api.example.com/users?page=5'
+ *    });
+ *
+ * @param {Object} links
+ * @return {ServerResponse}
+ * @public
+ */
+
+res.links = function(links){
+  var link = this.get('Link') || '';
+  if (link) link += ', ';
+  return this.set('Link', link + Object.keys(links).map(function(rel){
+    return '<' + links[rel] + '>; rel="' + rel + '"';
+  }).join(', '));
+};
+
+/**
+ * Send a response.
+ *
+ * Examples:
+ *
+ *     res.send(Buffer.from('wahoo'));
+ *     res.send({ some: 'json' });
+ *     res.send('<p>some html</p>');
+ *
+ * @param {string|number|boolean|object|Buffer} body
+ * @public
+ */
+
+res.send = function send(body) {
+  var chunk = body;
+  var encoding;
+  var req = this.req;
+  var type;
+
+  // settings
+  var app = this.app;
+
+  // allow status / body
+  if (arguments.length === 2) {
+    // res.send(body, status) backwards compat
+    if (typeof arguments[0] !== 'number' && typeof arguments[1] === 'number') {
+      deprecate('res.send(body, status): Use res.status(status).send(body) instead');
+      this.statusCode = arguments[1];
+    } else {
+      deprecate('res.send(status, body): Use res.status(status).send(body) instead');
+      this.statusCode = arguments[0];
+      chunk = arguments[1];
+    }
+  }
+
+  // disambiguate res.send(status) and res.send(status, num)
+  if (typeof chunk === 'number' && arguments.length === 1) {
+    // res.send(status) will set status message as text string
+    if (!this.get('Content-Type')) {
+      this.type('txt');
+    }
+
+    deprecate('res.send(status): Use res.sendStatus(status) instead');
+    this.statusCode = chunk;
+    chunk = statuses.message[chunk]
+  }
+
+  switch (typeof chunk) {
+    // string defaulting to html
+    case 'string':
+      if (!this.get('Content-Type')) {
+        this.type('html');
+      }
+      break;
+    case 'boolean':
+    case 'number':
+    case 'object':
+      if (chunk === null) {
+        chunk = '';
+      } else if (Buffer.isBuffer(chunk)) {
+        if (!this.get('Content-Type')) {
+          this.type('bin');
+        }
+      } else {
+        return this.json(chunk);
+      }
+      break;
+  }
+
+  // write strings in utf-8
+  if (typeof chunk === 'string') {
+    encoding = 'utf8';
+    type = this.get('Content-Type');
+
+    // reflect this in content-type
+    if (typeof type === 'string') {
+      this.set('Content-Type', setCharset(type, 'utf-8'));
+    }
+  }
+
+  // determine if ETag should be generated
+  var etagFn = app.get('etag fn')
+  var generateETag = !this.get('ETag') && typeof etagFn === 'function'
+
+  // populate Content-Length
+  var len
+  if (chunk !== undefined) {
+    if (Buffer.isBuffer(chunk)) {
+      // get length of Buffer
+      len = chunk.length
+    } else if (!generateETag && chunk.length < 1000) {
+      // just calculate length when no ETag + small chunk
+      len = Buffer.byteLength(chunk, encoding)
+    } else {
+      // convert chunk to Buffer and calculate
+      chunk = Buffer.from(chunk, encoding)
+      encoding = undefined;
+      len = chunk.length
+    }
+
+    this.set('Content-Length', len);
+  }
+
+  // populate ETag
+  var etag;
+  if (generateETag && len !== undefined) {
+    if ((etag = etagFn(chunk, encoding))) {
+      this.set('ETag', etag);
+    }
+  }
+
+  // freshness
+  if (req.fresh) this.statusCode = 304;
+
+  // strip irrelevant headers
+  if (204 === this.statusCode || 304 === this.statusCode) {
+    this.removeHeader('Content-Type');
+    this.removeHeader('Content-Length');
+    this.removeHeader('Transfer-Encoding');
+    chunk = '';
+  }
+
+  // alter headers for 205
+  if (this.statusCode === 205) {
+    this.set('Content-Length', '0')
+    this.removeHeader('Transfer-Encoding')
+    chunk = ''
+  }
+
+  if (req.method === 'HEAD') {
+    // skip body for HEAD
+    this.end();
+  } else {
+    // respond
+    this.end(chunk, encoding);
+  }
+
+  return this;
+};
+
+/**
+ * Send JSON response.
+ *
+ * Examples:
+ *
+ *     res.json(null);
+ *     res.json({ user: 'tj' });
+ *
+ * @param {string|number|boolean|object} obj
+ * @public
+ */
+
+res.json = function json(obj) {
+  var val = obj;
+
+  // allow status / body
+  if (arguments.length === 2) {
+    // res.json(body, status) backwards compat
+    if (typeof arguments[1] === 'number') {
+      deprecate('res.json(obj, status): Use res.status(status).json(obj) instead');
+      this.statusCode = arguments[1];
+    } else {
+      deprecate('res.json(status, obj): Use res.status(status).json(obj) instead');
+      this.statusCode = arguments[0];
+      val = arguments[1];
+    }
+  }
+
+  // settings
+  var app = this.app;
+  var escape = app.get('json escape')
+  var replacer = app.get('json replacer');
+  var spaces = app.get('json spaces');
+  var body = stringify(val, replacer, spaces, escape)
+
+  // content-type
+  if (!this.get('Content-Type')) {
+    this.set('Content-Type', 'application/json');
+  }
+
+  return this.send(body);
+};
+
+/**
+ * Send JSON response with JSONP callback support.
+ *
+ * Examples:
+ *
+ *     res.jsonp(null);
+ *     res.jsonp({ user: 'tj' });
+ *
+ * @param {string|number|boolean|object} obj
+ * @public
+ */
+
+res.jsonp = function jsonp(obj) {
+  var val = obj;
+
+  // allow status / body
+  if (arguments.length === 2) {
+    // res.jsonp(body, status) backwards compat
+    if (typeof arguments[1] === 'number') {
+      deprecate('res.jsonp(obj, status): Use res.status(status).jsonp(obj) instead');
+      this.statusCode = arguments[1];
+    } else {
+      deprecate('res.jsonp(status, obj): Use res.status(status).jsonp(obj) instead');
+      this.statusCode = arguments[0];
+      val = arguments[1];
+    }
+  }
+
+  // settings
+  var app = this.app;
+  var escape = app.get('json escape')
+  var replacer = app.get('json replacer');
+  var spaces = app.get('json spaces');
+  var body = stringify(val, replacer, spaces, escape)
+  var callback = this.req.query[app.get('jsonp callback name')];
+
+  // content-type
+  if (!this.get('Content-Type')) {
+    this.set('X-Content-Type-Options', 'nosniff');
+    this.set('Content-Type', 'application/json');
+  }
+
+  // fixup callback
+  if (Array.isArray(callback)) {
+    callback = callback[0];
+  }
+
+  // jsonp
+  if (typeof callback === 'string' && callback.length !== 0) {
+    this.set('X-Content-Type-Options', 'nosniff');
+    this.set('Content-Type', 'text/javascript');
+
+    // restrict callback charset
+    callback = callback.replace(/[^\[\]\w$.]/g, '');
+
+    if (body === undefined) {
+      // empty argument
+      body = ''
+    } else if (typeof body === 'string') {
+      // replace chars not allowed in JavaScript that are in JSON
+      body = body
+        .replace(/\u2028/g, '\\u2028')
+        .replace(/\u2029/g, '\\u2029')
+    }
+
+    // the /**/ is a specific security mitigation for "Rosetta Flash JSONP abuse"
+    // the typeof check is just to reduce client error noise
+    body = '/**/ typeof ' + callback + ' === \'function\' && ' + callback + '(' + body + ');';
+  }
+
+  return this.send(body);
+};
+
+/**
+ * Send given HTTP status code.
+ *
+ * Sets the response status to `statusCode` and the body of the
+ * response to the standard description from node's http.STATUS_CODES
+ * or the statusCode number if no description.
+ *
+ * Examples:
+ *
+ *     res.sendStatus(200);
+ *
+ * @param {number} statusCode
+ * @public
+ */
+
+res.sendStatus = function sendStatus(statusCode) {
+  var body = statuses.message[statusCode] || String(statusCode)
+
+  this.statusCode = statusCode;
+  this.type('txt');
+
+  return this.send(body);
+};
+
+/**
+ * Transfer the file at the given `path`.
+ *
+ * Automatically sets the _Content-Type_ response header field.
+ * The callback `callback(err)` is invoked when the transfer is complete
+ * or when an error occurs. Be sure to check `res.headersSent`
+ * if you wish to attempt responding, as the header and some data
+ * may have already been transferred.
+ *
+ * Options:
+ *
+ *   - `maxAge`   defaulting to 0 (can be string converted by `ms`)
+ *   - `root`     root directory for relative filenames
+ *   - `headers`  object of headers to serve with file
+ *   - `dotfiles` serve dotfiles, defaulting to false; can be `"allow"` to send them
+ *
+ * Other options are passed along to `send`.
+ *
+ * Examples:
+ *
+ *  The following example illustrates how `res.sendFile()` may
+ *  be used as an alternative for the `static()` middleware for
+ *  dynamic situations. The code backing `res.sendFile()` is actually
+ *  the same code, so HTTP cache support etc is identical.
+ *
+ *     app.get('/user/:uid/photos/:file', function(req, res){
+ *       var uid = req.params.uid
+ *         , file = req.params.file;
+ *
+ *       req.user.mayViewFilesFrom(uid, function(yes){
+ *         if (yes) {
+ *           res.sendFile('/uploads/' + uid + '/' + file);
+ *         } else {
+ *           res.send(403, 'Sorry! you cant see that.');
+ *         }
+ *       });
+ *     });
+ *
+ * @public
+ */
+
+res.sendFile = function sendFile(path, options, callback) {
+  var done = callback;
+  var req = this.req;
+  var res = this;
+  var next = req.next;
+  var opts = options || {};
+
+  if (!path) {
+    throw new TypeError('path argument is required to res.sendFile');
+  }
+
+  if (typeof path !== 'string') {
+    throw new TypeError('path must be a string to res.sendFile')
+  }
+
+  // support function as second arg
+  if (typeof options === 'function') {
+    done = options;
+    opts = {};
+  }
+
+  if (!opts.root && !isAbsolute(path)) {
+    throw new TypeError('path must be absolute or specify root to res.sendFile');
+  }
+
+  // create file stream
+  var pathname = encodeURI(path);
+  var file = send(req, pathname, opts);
+
+  // transfer
+  sendfile(res, file, opts, function (err) {
+    if (done) return done(err);
+    if (err && err.code === 'EISDIR') return next();
+
+    // next() all but write errors
+    if (err && err.code !== 'ECONNABORTED' && err.syscall !== 'write') {
+      next(err);
+    }
+  });
+};
+
+/**
+ * Transfer the file at the given `path`.
+ *
+ * Automatically sets the _Content-Type_ response header field.
+ * The callback `callback(err)` is invoked when the transfer is complete
+ * or when an error occurs. Be sure to check `res.headersSent`
+ * if you wish to attempt responding, as the header and some data
+ * may have already been transferred.
+ *
+ * Options:
+ *
+ *   - `maxAge`   defaulting to 0 (can be string converted by `ms`)
+ *   - `root`     root directory for relative filenames
+ *   - `headers`  object of headers to serve with file
+ *   - `dotfiles` serve dotfiles, defaulting to false; can be `"allow"` to send them
+ *
+ * Other options are passed along to `send`.
+ *
+ * Examples:
+ *
+ *  The following example illustrates how `res.sendfile()` may
+// ===== axios/lib/core/Axios.js (1.6.7) =====
+'use strict';
+
+import utils from './../utils.js';
+import buildURL from '../helpers/buildURL.js';
+import InterceptorManager from './InterceptorManager.js';
+import dispatchRequest from './dispatchRequest.js';
+import mergeConfig from './mergeConfig.js';
+import buildFullPath from './buildFullPath.js';
+import validator from '../helpers/validator.js';
+import AxiosHeaders from './AxiosHeaders.js';
+
+const validators = validator.validators;
+
+/**
+ * Create a new instance of Axios
+ *
+ * @param {Object} instanceConfig The default config for the instance
+ *
+ * @return {Axios} A new instance of Axios
+ */
+class Axios {
+  constructor(instanceConfig) {
+    this.defaults = instanceConfig;
+    this.interceptors = {
+      request: new InterceptorManager(),
+      response: new InterceptorManager()
+    };
+  }
+
+  /**
+   * Dispatch a request
+   *
+   * @param {String|Object} configOrUrl The config specific for this request (merged with this.defaults)
+   * @param {?Object} config
+   *
+   * @returns {Promise} The Promise to be fulfilled
+   */
+  async request(configOrUrl, config) {
+    try {
+      return await this._request(configOrUrl, config);
+    } catch (err) {
+      if (err instanceof Error) {
+        let dummy;
+
+        Error.captureStackTrace ? Error.captureStackTrace(dummy = {}) : (dummy = new Error());
+
+        // slice off the Error: ... line
+        const stack = dummy.stack ? dummy.stack.replace(/^.+\n/, '') : '';
+
+        if (!err.stack) {
+          err.stack = stack;
+          // match without the 2 top stack lines
+        } else if (stack && !String(err.stack).endsWith(stack.replace(/^.+\n.+\n/, ''))) {
+          err.stack += '\n' + stack
+        }
+      }
+
+      throw err;
+    }
+  }
+
+  _request(configOrUrl, config) {
+    /*eslint no-param-reassign:0*/
+    // Allow for axios('example/url'[, config]) a la fetch API
+    if (typeof configOrUrl === 'string') {
+      config = config || {};
+      config.url = configOrUrl;
+    } else {
+      config = configOrUrl || {};
+    }
+
+    config = mergeConfig(this.defaults, config);
+
+    const {transitional, paramsSerializer, headers} = config;
+
+    if (transitional !== undefined) {
+      validator.assertOptions(transitional, {
+        silentJSONParsing: validators.transitional(validators.boolean),
+        forcedJSONParsing: validators.transitional(validators.boolean),
+        clarifyTimeoutError: validators.transitional(validators.boolean)
+      }, false);
+    }
+
+    if (paramsSerializer != null) {
+      if (utils.isFunction(paramsSerializer)) {
+        config.paramsSerializer = {
+          serialize: paramsSerializer
+        }
+      } else {
+        validator.assertOptions(paramsSerializer, {
+          encode: validators.function,
+          serialize: validators.function
+        }, true);
+      }
+    }
+
+    // Set config.method
+    config.method = (config.method || this.defaults.method || 'get').toLowerCase();
+
+    // Flatten headers
+    let contextHeaders = headers && utils.merge(
+      headers.common,
+      headers[config.method]
+    );
+
+    headers && utils.forEach(
+      ['delete', 'get', 'head', 'post', 'put', 'patch', 'common'],
+      (method) => {
+        delete headers[method];
+      }
+    );
+
+    config.headers = AxiosHeaders.concat(contextHeaders, headers);
+
+    // filter out skipped interceptors
+    const requestInterceptorChain = [];
+    let synchronousRequestInterceptors = true;
+    this.interceptors.request.forEach(function unshiftRequestInterceptors(interceptor) {
+      if (typeof interceptor.runWhen === 'function' && interceptor.runWhen(config) === false) {
+        return;
+      }
+
+      synchronousRequestInterceptors = synchronousRequestInterceptors && interceptor.synchronous;
+
+      requestInterceptorChain.unshift(interceptor.fulfilled, interceptor.rejected);
+    });
+
+    const responseInterceptorChain = [];
+    this.interceptors.response.forEach(function pushResponseInterceptors(interceptor) {
+      responseInterceptorChain.push(interceptor.fulfilled, interceptor.rejected);
+    });
+
+    let promise;
+    let i = 0;
+    let len;
+
+    if (!synchronousRequestInterceptors) {
+      const chain = [dispatchRequest.bind(this), undefined];
+      chain.unshift.apply(chain, requestInterceptorChain);
+      chain.push.apply(chain, responseInterceptorChain);
+      len = chain.length;
+
+      promise = Promise.resolve(config);
+
+      while (i < len) {
+        promise = promise.then(chain[i++], chain[i++]);
+      }
+
+      return promise;
+    }
+
+    len = requestInterceptorChain.length;
+
+    let newConfig = config;
+
+    i = 0;
+
+    while (i < len) {
+      const onFulfilled = requestInterceptorChain[i++];
+      const onRejected = requestInterceptorChain[i++];
+      try {
+        newConfig = onFulfilled(newConfig);
+      } catch (error) {
+        onRejected.call(this, error);
+        break;
+      }
+    }
+
+    try {
+      promise = dispatchRequest.call(this, newConfig);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+
+    i = 0;
+    len = responseInterceptorChain.length;
+
+    while (i < len) {
+      promise = promise.then(responseInterceptorChain[i++], responseInterceptorChain[i++]);
+    }
+
+    return promise;
+  }
+
+  getUri(config) {
+    config = mergeConfig(this.defaults, config);
+    const fullPath = buildFullPath(config.baseURL, config.url);
+    return buildURL(fullPath, config.params, config.paramsSerializer);
+  }
+}
+
+// Provide aliases for supported request methods
+utils.forEach(['delete', 'get', 'head', 'options'], function forEachMethodNoData(method) {
+  /*eslint func-names:0*/
+  Axios.prototype[method] = function(url, config) {
+    return this.request(mergeConfig(config || {}, {
+      method,
+      url,
+      data: (config || {}).data
+    }));
+  };
+});
+
+utils.forEach(['post', 'put', 'patch'], function forEachMethodWithData(method) {
+  /*eslint func-names:0*/
+
+  function generateHTTPMethod(isForm) {
+    return function httpMethod(url, data, config) {
+      return this.request(mergeConfig(config || {}, {
+        method,
+        headers: isForm ? {
+          'Content-Type': 'multipart/form-data'
+        } : {},
+        url,
+        data
+      }));
+    };
+  }
+
+  Axios.prototype[method] = generateHTTPMethod();
+
+  Axios.prototype[method + 'Form'] = generateHTTPMethod(true);
+});
+
+export default Axios;
+// ===== axios/lib/adapters/xhr.js (1.6.7) =====
+'use strict';
+
+import utils from './../utils.js';
+import settle from './../core/settle.js';
+import cookies from './../helpers/cookies.js';
+import buildURL from './../helpers/buildURL.js';
+import buildFullPath from '../core/buildFullPath.js';
+import isURLSameOrigin from './../helpers/isURLSameOrigin.js';
+import transitionalDefaults from '../defaults/transitional.js';
+import AxiosError from '../core/AxiosError.js';
+import CanceledError from '../cancel/CanceledError.js';
+import parseProtocol from '../helpers/parseProtocol.js';
+import platform from '../platform/index.js';
+import AxiosHeaders from '../core/AxiosHeaders.js';
+import speedometer from '../helpers/speedometer.js';
+
+function progressEventReducer(listener, isDownloadStream) {
+  let bytesNotified = 0;
+  const _speedometer = speedometer(50, 250);
+
+  return e => {
+    const loaded = e.loaded;
+    const total = e.lengthComputable ? e.total : undefined;
+    const progressBytes = loaded - bytesNotified;
+    const rate = _speedometer(progressBytes);
+    const inRange = loaded <= total;
+
+    bytesNotified = loaded;
+
+    const data = {
+      loaded,
+      total,
+      progress: total ? (loaded / total) : undefined,
+      bytes: progressBytes,
+      rate: rate ? rate : undefined,
+      estimated: rate && total && inRange ? (total - loaded) / rate : undefined,
+      event: e
+    };
+
+    data[isDownloadStream ? 'download' : 'upload'] = true;
+
+    listener(data);
+  };
+}
+
+const isXHRAdapterSupported = typeof XMLHttpRequest !== 'undefined';
+
+export default isXHRAdapterSupported && function (config) {
+  return new Promise(function dispatchXhrRequest(resolve, reject) {
+    let requestData = config.data;
+    const requestHeaders = AxiosHeaders.from(config.headers).normalize();
+    let {responseType, withXSRFToken} = config;
+    let onCanceled;
+    function done() {
+      if (config.cancelToken) {
+        config.cancelToken.unsubscribe(onCanceled);
+      }
+
+      if (config.signal) {
+        config.signal.removeEventListener('abort', onCanceled);
+      }
+    }
+
+    let contentType;
+
+    if (utils.isFormData(requestData)) {
+      if (platform.hasStandardBrowserEnv || platform.hasStandardBrowserWebWorkerEnv) {
+        requestHeaders.setContentType(false); // Let the browser set it
+      } else if ((contentType = requestHeaders.getContentType()) !== false) {
+        // fix semicolon duplication issue for ReactNative FormData implementation
+        const [type, ...tokens] = contentType ? contentType.split(';').map(token => token.trim()).filter(Boolean) : [];
+        requestHeaders.setContentType([type || 'multipart/form-data', ...tokens].join('; '));
+      }
+    }
+
+    let request = new XMLHttpRequest();
+
+    // HTTP basic authentication
+    if (config.auth) {
+      const username = config.auth.username || '';
+      const password = config.auth.password ? unescape(encodeURIComponent(config.auth.password)) : '';
+      requestHeaders.set('Authorization', 'Basic ' + btoa(username + ':' + password));
+    }
+
+    const fullPath = buildFullPath(config.baseURL, config.url);
+
+    request.open(config.method.toUpperCase(), buildURL(fullPath, config.params, config.paramsSerializer), true);
+
+    // Set the request timeout in MS
+    request.timeout = config.timeout;
+
+    function onloadend() {
+      if (!request) {
+        return;
+      }
+      // Prepare the response
+      const responseHeaders = AxiosHeaders.from(
+        'getAllResponseHeaders' in request && request.getAllResponseHeaders()
+      );
+      const responseData = !responseType || responseType === 'text' || responseType === 'json' ?
+        request.responseText : request.response;
+      const response = {
+        data: responseData,
+        status: request.status,
+        statusText: request.statusText,
+        headers: responseHeaders,
+        config,
+        request
+      };
+
+      settle(function _resolve(value) {
+        resolve(value);
+        done();
+      }, function _reject(err) {
+        reject(err);
+        done();
+      }, response);
+
+      // Clean up request
+      request = null;
+    }
+
+    if ('onloadend' in request) {
+      // Use onloadend if available
+      request.onloadend = onloadend;
+    } else {
+      // Listen for ready state to emulate onloadend
+      request.onreadystatechange = function handleLoad() {
+        if (!request || request.readyState !== 4) {
+          return;
+        }
+
+        // The request errored out and we didn't get a response, this will be
+        // handled by onerror instead
+        // With one exception: request that using file: protocol, most browsers
+        // will return status as 0 even though it's a successful request
+        if (request.status === 0 && !(request.responseURL && request.responseURL.indexOf('file:') === 0)) {
+          return;
+        }
+        // readystate handler is calling before onerror or ontimeout handlers,
+        // so we should call onloadend on the next 'tick'
+        setTimeout(onloadend);
+      };
+    }
+
+    // Handle browser request cancellation (as opposed to a manual cancellation)
+    request.onabort = function handleAbort() {
+      if (!request) {
+        return;
+      }
+
+      reject(new AxiosError('Request aborted', AxiosError.ECONNABORTED, config, request));
+
+      // Clean up request
+      request = null;
+    };
+
+    // Handle low level network errors
+    request.onerror = function handleError() {
+      // Real errors are hidden from us by the browser
+      // onerror should only fire if it's a network error
+      reject(new AxiosError('Network Error', AxiosError.ERR_NETWORK, config, request));
+
+      // Clean up request
+      request = null;
+    };
+
+    // Handle timeout
+    request.ontimeout = function handleTimeout() {
+      let timeoutErrorMessage = config.timeout ? 'timeout of ' + config.timeout + 'ms exceeded' : 'timeout exceeded';
+      const transitional = config.transitional || transitionalDefaults;
+      if (config.timeoutErrorMessage) {
+        timeoutErrorMessage = config.timeoutErrorMessage;
+      }
+      reject(new AxiosError(
+        timeoutErrorMessage,
+        transitional.clarifyTimeoutError ? AxiosError.ETIMEDOUT : AxiosError.ECONNABORTED,
+        config,
+        request));
+
+      // Clean up request
+      request = null;
+    };
+
+    // Add xsrf header
+    // This is only done if running in a standard browser environment.
+    // Specifically not if we're in a web worker, or react-native.
+    if(platform.hasStandardBrowserEnv) {
+      withXSRFToken && utils.isFunction(withXSRFToken) && (withXSRFToken = withXSRFToken(config));
+
+      if (withXSRFToken || (withXSRFToken !== false && isURLSameOrigin(fullPath))) {
+        // Add xsrf header
+        const xsrfValue = config.xsrfHeaderName && config.xsrfCookieName && cookies.read(config.xsrfCookieName);
+
+        if (xsrfValue) {
+          requestHeaders.set(config.xsrfHeaderName, xsrfValue);
+        }
+      }
+    }
+
+    // Remove Content-Type if data is undefined
+    requestData === undefined && requestHeaders.setContentType(null);
+
+    // Add headers to the request
+    if ('setRequestHeader' in request) {
+      utils.forEach(requestHeaders.toJSON(), function setRequestHeader(val, key) {
+        request.setRequestHeader(key, val);
+      });
+    }
+
+    // Add withCredentials to request if needed
+    if (!utils.isUndefined(config.withCredentials)) {
+      request.withCredentials = !!config.withCredentials;
+    }
+
+    // Add responseType to request if needed
+    if (responseType && responseType !== 'json') {
+      request.responseType = config.responseType;
+    }
+
+    // Handle progress if needed
+    if (typeof config.onDownloadProgress === 'function') {
+      request.addEventListener('progress', progressEventReducer(config.onDownloadProgress, true));
+    }
+
+    // Not all browsers support upload events
+    if (typeof config.onUploadProgress === 'function' && request.upload) {
+      request.upload.addEventListener('progress', progressEventReducer(config.onUploadProgress));
+    }
+
+    if (config.cancelToken || config.signal) {
+      // Handle cancellation
+      // eslint-disable-next-line func-names
+      onCanceled = cancel => {
+        if (!request) {
+          return;
+        }
+        reject(!cancel || cancel.type ? new CanceledError(null, config, request) : cancel);
+        request.abort();
+        request = null;
+      };
+
+      config.cancelToken && config.cancelToken.subscribe(onCanceled);
+      if (config.signal) {
+        config.signal.aborted ? onCanceled() : config.signal.addEventListener('abort', onCanceled);
+      }
+    }
+
+    const protocol = parseProtocol(fullPath);
+
+    if (protocol && platform.protocols.indexOf(protocol) === -1) {
+      reject(new AxiosError('Unsupported protocol ' + protocol + ':', AxiosError.ERR_BAD_REQUEST, config));
+      return;
+    }
+
+
+    // Send the request
+    request.send(requestData || null);
+  });
+}
+// ===== commander/lib/command.js (12.0.0) =====
+const EventEmitter = require('events').EventEmitter;
+const childProcess = require('child_process');
+const path = require('path');
+const fs = require('fs');
+const process = require('process');
+
+const { Argument, humanReadableArgName } = require('./argument.js');
+const { CommanderError } = require('./error.js');
+const { Help } = require('./help.js');
+const { Option, DualOptions } = require('./option.js');
+const { suggestSimilar } = require('./suggestSimilar');
+
+class Command extends EventEmitter {
+  /**
+   * Initialize a new `Command`.
+   *
+   * @param {string} [name]
+   */
+
+  constructor(name) {
+    super();
+    /** @type {Command[]} */
+    this.commands = [];
+    /** @type {Option[]} */
+    this.options = [];
+    this.parent = null;
+    this._allowUnknownOption = false;
+    this._allowExcessArguments = true;
+    /** @type {Argument[]} */
+    this.registeredArguments = [];
+    this._args = this.registeredArguments; // deprecated old name
+    /** @type {string[]} */
+    this.args = []; // cli args with options removed
+    this.rawArgs = [];
+    this.processedArgs = []; // like .args but after custom processing and collecting variadic
+    this._scriptPath = null;
+    this._name = name || '';
+    this._optionValues = {};
+    this._optionValueSources = {}; // default, env, cli etc
+    this._storeOptionsAsProperties = false;
+    this._actionHandler = null;
+    this._executableHandler = false;
+    this._executableFile = null; // custom name for executable
+    this._executableDir = null; // custom search directory for subcommands
+    this._defaultCommandName = null;
+    this._exitCallback = null;
+    this._aliases = [];
+    this._combineFlagAndOptionalValue = true;
+    this._description = '';
+    this._summary = '';
+    this._argsDescription = undefined; // legacy
+    this._enablePositionalOptions = false;
+    this._passThroughOptions = false;
+    this._lifeCycleHooks = {}; // a hash of arrays
+    /** @type {(boolean | string)} */
+    this._showHelpAfterError = false;
+    this._showSuggestionAfterError = true;
+
+    // see .configureOutput() for docs
+    this._outputConfiguration = {
+      writeOut: (str) => process.stdout.write(str),
+      writeErr: (str) => process.stderr.write(str),
+      getOutHelpWidth: () => process.stdout.isTTY ? process.stdout.columns : undefined,
+      getErrHelpWidth: () => process.stderr.isTTY ? process.stderr.columns : undefined,
+      outputError: (str, write) => write(str)
+    };
+
+    this._hidden = false;
+    /** @type {(Option | null | undefined)} */
+    this._helpOption = undefined; // Lazy created on demand. May be null if help option is disabled.
+    this._addImplicitHelpCommand = undefined; // undecided whether true or false yet, not inherited
+    /** @type {Command} */
+    this._helpCommand = undefined; // lazy initialised, inherited
+    this._helpConfiguration = {};
+  }
+
+  /**
+   * Copy settings that are useful to have in common across root command and subcommands.
+   *
+   * (Used internally when adding a command using `.command()` so subcommands inherit parent settings.)
+   *
+   * @param {Command} sourceCommand
+   * @return {Command} `this` command for chaining
+   */
+  copyInheritedSettings(sourceCommand) {
+    this._outputConfiguration = sourceCommand._outputConfiguration;
+    this._helpOption = sourceCommand._helpOption;
+    this._helpCommand = sourceCommand._helpCommand;
+    this._helpConfiguration = sourceCommand._helpConfiguration;
+    this._exitCallback = sourceCommand._exitCallback;
+    this._storeOptionsAsProperties = sourceCommand._storeOptionsAsProperties;
+    this._combineFlagAndOptionalValue = sourceCommand._combineFlagAndOptionalValue;
+    this._allowExcessArguments = sourceCommand._allowExcessArguments;
+    this._enablePositionalOptions = sourceCommand._enablePositionalOptions;
+    this._showHelpAfterError = sourceCommand._showHelpAfterError;
+    this._showSuggestionAfterError = sourceCommand._showSuggestionAfterError;
+
+    return this;
+  }
+
+  /**
+   * @returns {Command[]}
+   * @private
+   */
+
+  _getCommandAndAncestors() {
+    const result = [];
+    for (let command = this; command; command = command.parent) {
+      result.push(command);
+    }
+    return result;
+  }
+
+  /**
+   * Define a command.
+   *
+   * There are two styles of command: pay attention to where to put the description.
+   *
+   * @example
+   * // Command implemented using action handler (description is supplied separately to `.command`)
+   * program
+   *   .command('clone <source> [destination]')
+   *   .description('clone a repository into a newly created directory')
+   *   .action((source, destination) => {
+   *     console.log('clone command called');
+   *   });
+   *
+   * // Command implemented using separate executable file (description is second parameter to `.command`)
+   * program
+   *   .command('start <service>', 'start named service')
+   *   .command('stop [service]', 'stop named service, or all if no name supplied');
+   *
+   * @param {string} nameAndArgs - command name and arguments, args are `<required>` or `[optional]` and last may also be `variadic...`
+   * @param {(Object|string)} [actionOptsOrExecDesc] - configuration options (for action), or description (for executable)
+   * @param {Object} [execOpts] - configuration options (for executable)
+   * @return {Command} returns new command for action handler, or `this` for executable command
+   */
+
+  command(nameAndArgs, actionOptsOrExecDesc, execOpts) {
+    let desc = actionOptsOrExecDesc;
+    let opts = execOpts;
+    if (typeof desc === 'object' && desc !== null) {
+      opts = desc;
+      desc = null;
+    }
+    opts = opts || {};
+    const [, name, args] = nameAndArgs.match(/([^ ]+) *(.*)/);
+
+    const cmd = this.createCommand(name);
+    if (desc) {
+      cmd.description(desc);
+      cmd._executableHandler = true;
+    }
+    if (opts.isDefault) this._defaultCommandName = cmd._name;
+    cmd._hidden = !!(opts.noHelp || opts.hidden); // noHelp is deprecated old name for hidden
+    cmd._executableFile = opts.executableFile || null; // Custom name for executable file, set missing to null to match constructor
+    if (args) cmd.arguments(args);
+    this._registerCommand(cmd);
+    cmd.parent = this;
+    cmd.copyInheritedSettings(this);
+
+    if (desc) return this;
+    return cmd;
+  }
+
+  /**
+   * Factory routine to create a new unattached command.
+   *
+   * See .command() for creating an attached subcommand, which uses this routine to
+   * create the command. You can override createCommand to customise subcommands.
+   *
+   * @param {string} [name]
+   * @return {Command} new command
+   */
+
+  createCommand(name) {
+    return new Command(name);
+  }
+
+  /**
+   * You can customise the help with a subclass of Help by overriding createHelp,
+   * or by overriding Help properties using configureHelp().
+   *
+   * @return {Help}
+   */
+
+  createHelp() {
+    return Object.assign(new Help(), this.configureHelp());
+  }
+
+  /**
+   * You can customise the help by overriding Help properties using configureHelp(),
+   * or with a subclass of Help by overriding createHelp().
+   *
+   * @param {Object} [configuration] - configuration options
+   * @return {(Command|Object)} `this` command for chaining, or stored configuration
+   */
+
+  configureHelp(configuration) {
+    if (configuration === undefined) return this._helpConfiguration;
+
+    this._helpConfiguration = configuration;
+    return this;
+  }
+
+  /**
+   * The default output goes to stdout and stderr. You can customise this for special
+   * applications. You can also customise the display of errors by overriding outputError.
+   *
+   * The configuration properties are all functions:
+   *
+   *     // functions to change where being written, stdout and stderr
+   *     writeOut(str)
+   *     writeErr(str)
+   *     // matching functions to specify width for wrapping help
+   *     getOutHelpWidth()
+   *     getErrHelpWidth()
+   *     // functions based on what is being written out
+   *     outputError(str, write) // used for displaying errors, and not used for displaying help
+   *
+   * @param {Object} [configuration] - configuration options
+   * @return {(Command|Object)} `this` command for chaining, or stored configuration
+   */
+
+  configureOutput(configuration) {
+    if (configuration === undefined) return this._outputConfiguration;
+
+    Object.assign(this._outputConfiguration, configuration);
+    return this;
+  }
+
+  /**
+   * Display the help or a custom message after an error occurs.
+   *
+   * @param {(boolean|string)} [displayHelp]
+   * @return {Command} `this` command for chaining
+   */
+  showHelpAfterError(displayHelp = true) {
+    if (typeof displayHelp !== 'string') displayHelp = !!displayHelp;
+    this._showHelpAfterError = displayHelp;
+    return this;
+  }
+
+  /**
+   * Display suggestion of similar commands for unknown commands, or options for unknown options.
+   *
+   * @param {boolean} [displaySuggestion]
+   * @return {Command} `this` command for chaining
+   */
+  showSuggestionAfterError(displaySuggestion = true) {
+    this._showSuggestionAfterError = !!displaySuggestion;
+    return this;
+  }
+
+  /**
+   * Add a prepared subcommand.
+   *
+   * See .command() for creating an attached subcommand which inherits settings from its parent.
+   *
+   * @param {Command} cmd - new subcommand
+   * @param {Object} [opts] - configuration options
+   * @return {Command} `this` command for chaining
+   */
+
+  addCommand(cmd, opts) {
+    if (!cmd._name) {
+      throw new Error(`Command passed to .addCommand() must have a name
+- specify the name in Command constructor or using .name()`);
+    }
+
+    opts = opts || {};
+    if (opts.isDefault) this._defaultCommandName = cmd._name;
+    if (opts.noHelp || opts.hidden) cmd._hidden = true; // modifying passed command due to existing implementation
+
+    this._registerCommand(cmd);
+    cmd.parent = this;
+    cmd._checkForBrokenPassThrough();
+
+    return this;
+  }
+
+  /**
+   * Factory routine to create a new unattached argument.
+   *
+   * See .argument() for creating an attached argument, which uses this routine to
+   * create the argument. You can override createArgument to return a custom argument.
+   *
+   * @param {string} name
+   * @param {string} [description]
+   * @return {Argument} new argument
+   */
+
+  createArgument(name, description) {
+    return new Argument(name, description);
+  }
+
+  /**
+   * Define argument syntax for command.
+   *
+   * The default is that the argument is required, and you can explicitly
+   * indicate this with <> around the name. Put [] around the name for an optional argument.
+   *
+   * @example
+   * program.argument('<input-file>');
+   * program.argument('[output-file]');
+   *
+   * @param {string} name
+   * @param {string} [description]
+   * @param {(Function|*)} [fn] - custom argument processing function
+   * @param {*} [defaultValue]
+   * @return {Command} `this` command for chaining
+   */
+  argument(name, description, fn, defaultValue) {
+    const argument = this.createArgument(name, description);
+    if (typeof fn === 'function') {
+      argument.default(defaultValue).argParser(fn);
+    } else {
+      argument.default(fn);
+    }
+    this.addArgument(argument);
+    return this;
+  }
+
+  /**
+   * Define argument syntax for command, adding multiple at once (without descriptions).
+   *
+   * See also .argument().
+   *
+   * @example
+   * program.arguments('<cmd> [env]');
+   *
+   * @param {string} names
+   * @return {Command} `this` command for chaining
+   */
+
+  arguments(names) {
+    names.trim().split(/ +/).forEach((detail) => {
+      this.argument(detail);
+    });
+    return this;
+  }
+
+  /**
+   * Define argument syntax for command, adding a prepared argument.
+   *
+   * @param {Argument} argument
+   * @return {Command} `this` command for chaining
+   */
+  addArgument(argument) {
+    const previousArgument = this.registeredArguments.slice(-1)[0];
+    if (previousArgument && previousArgument.variadic) {
+      throw new Error(`only the last argument can be variadic '${previousArgument.name()}'`);
+    }
+    if (argument.required && argument.defaultValue !== undefined && argument.parseArg === undefined) {
+      throw new Error(`a default value for a required argument is never used: '${argument.name()}'`);
+    }
+    this.registeredArguments.push(argument);
+    return this;
+  }
+
+  /**
+// ===== chalk/source/index.js (5.3.0) =====
+import ansiStyles from '#ansi-styles';
+import supportsColor from '#supports-color';
+import { // eslint-disable-line import/order
+	stringReplaceAll,
+	stringEncaseCRLFWithFirstIndex,
+} from './utilities.js';
+
+const {stdout: stdoutColor, stderr: stderrColor} = supportsColor;
+
+const GENERATOR = Symbol('GENERATOR');
+const STYLER = Symbol('STYLER');
+const IS_EMPTY = Symbol('IS_EMPTY');
+
+// `supportsColor.level` → `ansiStyles.color[name]` mapping
+const levelMapping = [
+	'ansi',
+	'ansi',
+	'ansi256',
+	'ansi16m',
+];
+
+const styles = Object.create(null);
+
+const applyOptions = (object, options = {}) => {
+	if (options.level && !(Number.isInteger(options.level) && options.level >= 0 && options.level <= 3)) {
+		throw new Error('The `level` option should be an integer from 0 to 3');
+	}
+
+	// Detect level if not set manually
+	const colorLevel = stdoutColor ? stdoutColor.level : 0;
+	object.level = options.level === undefined ? colorLevel : options.level;
+};
+
+export class Chalk {
+	constructor(options) {
+		// eslint-disable-next-line no-constructor-return
+		return chalkFactory(options);
+	}
+}
+
+const chalkFactory = options => {
+	const chalk = (...strings) => strings.join(' ');
+	applyOptions(chalk, options);
+
+	Object.setPrototypeOf(chalk, createChalk.prototype);
+
+	return chalk;
+};
+
+function createChalk(options) {
+	return chalkFactory(options);
+}
+
+Object.setPrototypeOf(createChalk.prototype, Function.prototype);
+
+for (const [styleName, style] of Object.entries(ansiStyles)) {
+	styles[styleName] = {
+		get() {
+			const builder = createBuilder(this, createStyler(style.open, style.close, this[STYLER]), this[IS_EMPTY]);
+			Object.defineProperty(this, styleName, {value: builder});
+			return builder;
+		},
+	};
+}
+
+styles.visible = {
+	get() {
+		const builder = createBuilder(this, this[STYLER], true);
+		Object.defineProperty(this, 'visible', {value: builder});
+		return builder;
+	},
+};
+
+const getModelAnsi = (model, level, type, ...arguments_) => {
+	if (model === 'rgb') {
+		if (level === 'ansi16m') {
+			return ansiStyles[type].ansi16m(...arguments_);
+		}
+
+		if (level === 'ansi256') {
+			return ansiStyles[type].ansi256(ansiStyles.rgbToAnsi256(...arguments_));
+		}
+
+		return ansiStyles[type].ansi(ansiStyles.rgbToAnsi(...arguments_));
+	}
+
+	if (model === 'hex') {
+		return getModelAnsi('rgb', level, type, ...ansiStyles.hexToRgb(...arguments_));
+	}
+
+	return ansiStyles[type][model](...arguments_);
+};
+
+const usedModels = ['rgb', 'hex', 'ansi256'];
+
+for (const model of usedModels) {
+	styles[model] = {
+		get() {
+			const {level} = this;
+			return function (...arguments_) {
+				const styler = createStyler(getModelAnsi(model, levelMapping[level], 'color', ...arguments_), ansiStyles.color.close, this[STYLER]);
+				return createBuilder(this, styler, this[IS_EMPTY]);
+			};
+		},
+	};
+
+	const bgModel = 'bg' + model[0].toUpperCase() + model.slice(1);
+	styles[bgModel] = {
+		get() {
+			const {level} = this;
+			return function (...arguments_) {
+				const styler = createStyler(getModelAnsi(model, levelMapping[level], 'bgColor', ...arguments_), ansiStyles.bgColor.close, this[STYLER]);
+				return createBuilder(this, styler, this[IS_EMPTY]);
+			};
+		},
+	};
+}
+
+const proto = Object.defineProperties(() => {}, {
+	...styles,
+	level: {
+		enumerable: true,
+		get() {
+			return this[GENERATOR].level;
+		},
+		set(level) {
+			this[GENERATOR].level = level;
+		},
+	},
+});
+
+const createStyler = (open, close, parent) => {
+	let openAll;
+	let closeAll;
+	if (parent === undefined) {
+		openAll = open;
+		closeAll = close;
+	} else {
+		openAll = parent.openAll + open;
+		closeAll = close + parent.closeAll;
+	}
+
+	return {
+		open,
+		close,
+		openAll,
+		closeAll,
+		parent,
+	};
+};
+
+const createBuilder = (self, _styler, _isEmpty) => {
+	// Single argument is hot path, implicit coercion is faster than anything
+	// eslint-disable-next-line no-implicit-coercion
+	const builder = (...arguments_) => applyStyle(builder, (arguments_.length === 1) ? ('' + arguments_[0]) : arguments_.join(' '));
+
+	// We alter the prototype because we must return a function, but there is
+	// no way to create a function with a different prototype
+	Object.setPrototypeOf(builder, proto);
+
+	builder[GENERATOR] = self;
+	builder[STYLER] = _styler;
+	builder[IS_EMPTY] = _isEmpty;
+
+	return builder;
+};
+
+const applyStyle = (self, string) => {
+	if (self.level <= 0 || !string) {
+		return self[IS_EMPTY] ? '' : string;
+	}
+
+	let styler = self[STYLER];
+
+	if (styler === undefined) {
+		return string;
+	}
+
+	const {openAll, closeAll} = styler;
+	if (string.includes('\u001B')) {
+		while (styler !== undefined) {
+			// Replace any instances already present with a re-opening code
+			// otherwise only the part of the string until said closing code
+			// will be colored, and the rest will simply be 'plain'.
+			string = stringReplaceAll(string, styler.close, styler.open);
+
+			styler = styler.parent;
+		}
+	}
+
+	// We can move both next actions out of loop, because remaining actions in loop won't have
+	// any/visible effect on parts we add here. Close the styling before a linebreak and reopen
+	// after next line to fix a bleed issue on macOS: https://github.com/chalk/chalk/pull/92
+	const lfIndex = string.indexOf('\n');
+	if (lfIndex !== -1) {
+		string = stringEncaseCRLFWithFirstIndex(string, closeAll, openAll, lfIndex);
+	}
+
+	return openAll + string + closeAll;
+};
+
+Object.defineProperties(createChalk.prototype, styles);
+
+const chalk = createChalk();
+export const chalkStderr = createChalk({level: stderrColor ? stderrColor.level : 0});
+
+export {
+	modifierNames,
+	foregroundColorNames,
+	backgroundColorNames,
+	colorNames,
+
+	// TODO: Remove these aliases in the next major version
+	modifierNames as modifiers,
+	foregroundColorNames as foregroundColors,
+	backgroundColorNames as backgroundColors,
+	colorNames as colors,
+} from './vendor/ansi-styles/index.js';
+
+export {
+	stdoutColor as supportsColor,
+	stderrColor as supportsColorStderr,
+};
+
+export default chalk;
+// ===== vue/runtime-core/component.ts (3.4.21) =====
+import { type VNode, type VNodeChild, isVNode } from './vnode'
+import {
+  EffectScope,
+  type ReactiveEffect,
+  TrackOpTypes,
+  isRef,
+  markRaw,
+  pauseTracking,
+  proxyRefs,
+  resetTracking,
+  shallowReadonly,
+  track,
+} from '@vue/reactivity'
+import {
+  type ComponentPublicInstance,
+  type ComponentPublicInstanceConstructor,
+  PublicInstanceProxyHandlers,
+  RuntimeCompiledPublicInstanceProxyHandlers,
+  createDevRenderContext,
+  exposePropsOnRenderContext,
+  exposeSetupStateOnRenderContext,
+  publicPropertiesMap,
+} from './componentPublicInstance'
+import {
+  type ComponentPropsOptions,
+  type NormalizedPropsOptions,
+  initProps,
+  normalizePropsOptions,
+} from './componentProps'
+import {
+  type InternalSlots,
+  type Slots,
+  type SlotsType,
+  type UnwrapSlotsType,
+  initSlots,
+} from './componentSlots'
+import { warn } from './warning'
+import { ErrorCodes, callWithErrorHandling, handleError } from './errorHandling'
+import {
+  type AppConfig,
+  type AppContext,
+  createAppContext,
+} from './apiCreateApp'
+import { type Directive, validateDirectiveName } from './directives'
+import {
+  type ComponentOptions,
+  type ComputedOptions,
+  type MethodOptions,
+  applyOptions,
+  resolveMergedOptions,
+} from './componentOptions'
+import {
+  type EmitFn,
+  type EmitsOptions,
+  type EmitsToProps,
+  type ObjectEmitsOptions,
+  type ShortEmitsToObject,
+  emit,
+  normalizeEmitsOptions,
+} from './componentEmits'
+import {
+  EMPTY_OBJ,
+  type IfAny,
+  NOOP,
+  ShapeFlags,
+  extend,
+  getGlobalThis,
+  isArray,
+  isFunction,
+  isObject,
+  isPromise,
+  makeMap,
+} from '@vue/shared'
+import type { SuspenseBoundary } from './components/Suspense'
+import type { CompilerOptions } from '@vue/compiler-core'
+import { markAttrsAccessed } from './componentRenderUtils'
+import { currentRenderingInstance } from './componentRenderContext'
+import { endMeasure, startMeasure } from './profiling'
+import { convertLegacyRenderFn } from './compat/renderFn'
+import {
+  type CompatConfig,
+  globalCompatConfig,
+  validateCompatConfig,
+} from './compat/compatConfig'
+import type { SchedulerJob } from './scheduler'
+import type { LifecycleHooks } from './enums'
+
+export type Data = Record<string, unknown>
+
+/**
+ * Public utility type for extracting the instance type of a component.
+ * Works with all valid component definition types. This is intended to replace
+ * the usage of `InstanceType<typeof Comp>` which only works for
+ * constructor-based component definition types.
+ *
+ * Exmaple:
+ * ```ts
+ * const MyComp = { ... }
+ * declare const instance: ComponentInstance<typeof MyComp>
+ * ```
+ */
+export type ComponentInstance<T> = T extends { new (): ComponentPublicInstance }
+  ? InstanceType<T>
+  : T extends FunctionalComponent<infer Props, infer Emits>
+    ? ComponentPublicInstance<Props, {}, {}, {}, {}, ShortEmitsToObject<Emits>>
+    : T extends Component<
+          infer Props,
+          infer RawBindings,
+          infer D,
+          infer C,
+          infer M
+        >
+      ? // NOTE we override Props/RawBindings/D to make sure is not `unknown`
+        ComponentPublicInstance<
+          unknown extends Props ? {} : Props,
+          unknown extends RawBindings ? {} : RawBindings,
+          unknown extends D ? {} : D,
+          C,
+          M
+        >
+      : never // not a vue Component
+
+/**
+ * For extending allowed non-declared props on components in TSX
+ */
+export interface ComponentCustomProps {}
+
+/**
+ * Default allowed non-declared props on component in TSX
+ */
+export interface AllowedComponentProps {
+  class?: unknown
+  style?: unknown
+}
+
+// Note: can't mark this whole interface internal because some public interfaces
+// extend it.
+export interface ComponentInternalOptions {
+  /**
+   * @internal
+   */
+  __scopeId?: string
+  /**
+   * @internal
+   */
+  __cssModules?: Data
+  /**
+   * @internal
+   */
+  __hmrId?: string
+  /**
+   * Compat build only, for bailing out of certain compatibility behavior
+   */
+  __isBuiltIn?: boolean
+  /**
+   * This one should be exposed so that devtools can make use of it
+   */
+  __file?: string
+  /**
+   * name inferred from filename
+   */
+  __name?: string
+}
+
+export interface FunctionalComponent<
+  P = {},
+  E extends EmitsOptions | Record<string, any[]> = {},
+  S extends Record<string, any> = any,
+  EE extends EmitsOptions = ShortEmitsToObject<E>,
+> extends ComponentInternalOptions {
+  // use of any here is intentional so it can be a valid JSX Element constructor
+  (
+    props: P & EmitsToProps<EE>,
+    ctx: Omit<SetupContext<EE, IfAny<S, {}, SlotsType<S>>>, 'expose'>,
+  ): any
+  props?: ComponentPropsOptions<P>
+  emits?: EE | (keyof EE)[]
+  slots?: IfAny<S, Slots, SlotsType<S>>
+  inheritAttrs?: boolean
+  displayName?: string
+  compatConfig?: CompatConfig
+}
+
+export interface ClassComponent {
+  new (...args: any[]): ComponentPublicInstance<any, any, any, any, any>
+  __vccOpts: ComponentOptions
+}
+
+/**
+ * Concrete component type matches its actual value: it's either an options
+ * object, or a function. Use this where the code expects to work with actual
+ * values, e.g. checking if its a function or not. This is mostly for internal
+ * implementation code.
+ */
+export type ConcreteComponent<
+  Props = {},
+  RawBindings = any,
+  D = any,
+  C extends ComputedOptions = ComputedOptions,
+  M extends MethodOptions = MethodOptions,
+  E extends EmitsOptions | Record<string, any[]> = {},
+  S extends Record<string, any> = any,
+> =
+  | ComponentOptions<Props, RawBindings, D, C, M>
+  | FunctionalComponent<Props, E, S>
+
+/**
+ * A type used in public APIs where a component type is expected.
+ * The constructor type is an artificial type returned by defineComponent().
+ */
+export type Component<
+  Props = any,
+  RawBindings = any,
+  D = any,
+  C extends ComputedOptions = ComputedOptions,
+  M extends MethodOptions = MethodOptions,
+  E extends EmitsOptions | Record<string, any[]> = {},
+  S extends Record<string, any> = any,
+> =
+  | ConcreteComponent<Props, RawBindings, D, C, M, E, S>
+  | ComponentPublicInstanceConstructor<Props>
+
+export type { ComponentOptions }
+
+type LifecycleHook<TFn = Function> = TFn[] | null
+
+// use `E extends any` to force evaluating type to fix #2362
+export type SetupContext<
+  E = EmitsOptions,
+  S extends SlotsType = {},
+> = E extends any
+  ? {
+      attrs: Data
+      slots: UnwrapSlotsType<S>
+      emit: EmitFn<E>
+      expose: (exposed?: Record<string, any>) => void
+    }
+  : never
+
+/**
+ * @internal
+ */
+export type InternalRenderFunction = {
+  (
+    ctx: ComponentPublicInstance,
+    cache: ComponentInternalInstance['renderCache'],
+    // for compiler-optimized bindings
+    $props: ComponentInternalInstance['props'],
+    $setup: ComponentInternalInstance['setupState'],
+    $data: ComponentInternalInstance['data'],
+    $options: ComponentInternalInstance['ctx'],
+  ): VNodeChild
+  _rc?: boolean // isRuntimeCompiled
+
+  // __COMPAT__ only
+  _compatChecked?: boolean // v3 and already checked for v2 compat
+  _compatWrapped?: boolean // is wrapped for v2 compat
+}
+
+/**
+ * We expose a subset of properties on the internal instance as they are
+ * useful for advanced external libraries and tools.
+ */
+export interface ComponentInternalInstance {
+  uid: number
+  type: ConcreteComponent
+  parent: ComponentInternalInstance | null
+  root: ComponentInternalInstance
+  appContext: AppContext
+  /**
+   * Vnode representing this component in its parent's vdom tree
+   */
+  vnode: VNode
+  /**
+   * The pending new vnode from parent updates
+   * @internal
+   */
+  next: VNode | null
+  /**
+   * Root vnode of this component's own vdom tree
+   */
+  subTree: VNode
+  /**
+   * Render effect instance
+   */
+  effect: ReactiveEffect
+  /**
+   * Bound effect runner to be passed to schedulers
+   */
+  update: SchedulerJob
+  /**
+   * The render function that returns vdom tree.
+   * @internal
+   */
+  render: InternalRenderFunction | null
+  /**
+   * SSR render function
+   * @internal
+   */
+  ssrRender?: Function | null
+  /**
+   * Object containing values this component provides for its descendants
+   * @internal
+   */
+  provides: Data
+  /**
+   * Tracking reactive effects (e.g. watchers) associated with this component
+   * so that they can be automatically stopped on component unmount
+   * @internal
+   */
+  scope: EffectScope
+  /**
+   * cache for proxy access type to avoid hasOwnProperty calls
+   * @internal
+   */
+  accessCache: Data | null
+  /**
+   * cache for render function values that rely on _ctx but won't need updates
+   * after initialized (e.g. inline handlers)
+   * @internal
+   */
+  renderCache: (Function | VNode)[]
+
+  /**
+   * Resolved component registry, only for components with mixins or extends
+   * @internal
+   */
+  components: Record<string, ConcreteComponent> | null
+  /**
+   * Resolved directive registry, only for components with mixins or extends
+   * @internal
+   */
+  directives: Record<string, Directive> | null
+  /**
+   * Resolved filters registry, v2 compat only
+   * @internal
+   */
+  filters?: Record<string, Function>
+  /**
+   * resolved props options
+   * @internal
+   */
+  propsOptions: NormalizedPropsOptions
+  /**
+   * resolved emits options
+   * @internal
+   */
+  emitsOptions: ObjectEmitsOptions | null
+  /**
+   * resolved inheritAttrs options
+   * @internal
+   */
+  inheritAttrs?: boolean
+  /**
+   * is custom element?
+   * @internal
+   */
+  isCE?: boolean
+  /**
+   * custom element specific HMR method
+   * @internal
+   */
+  ceReload?: (newStyles?: string[]) => void
+
+  // the rest are only for stateful components ---------------------------------
+
+  // main proxy that serves as the public instance (`this`)
+  proxy: ComponentPublicInstance | null
+
+  // exposed properties via expose()
+  exposed: Record<string, any> | null
+  exposeProxy: Record<string, any> | null
+
+  /**
+   * alternative proxy used only for runtime-compiled render functions using
+   * `with` block
+   * @internal
+   */
+  withProxy: ComponentPublicInstance | null
+  /**
+   * This is the target for the public instance proxy. It also holds properties
+   * injected by user options (computed, methods etc.) and user-attached
+   * custom properties (via `this.x = ...`)
+   * @internal
+   */
+  ctx: Data
+
+  // state
+  data: Data
+  props: Data
+  attrs: Data
+  slots: InternalSlots
+  refs: Data
+  emit: EmitFn
+
+  attrsProxy: Data | null
+  slotsProxy: Slots | null
+
+  /**
+   * used for keeping track of .once event handlers on components
+   * @internal
+   */
+  emitted: Record<string, boolean> | null
+  /**
+   * used for caching the value returned from props default factory functions to
+   * avoid unnecessary watcher trigger
+   * @internal
+   */
+  propsDefaults: Data
+  /**
+   * setup related
+   * @internal
+   */
+  setupState: Data
+  /**
+   * devtools access to additional info
+   * @internal
+   */
+  devtoolsRawSetupState?: any
+  /**
+   * @internal
+   */
+  setupContext: SetupContext | null
+
+  /**
+   * suspense related
+   * @internal
+   */
+  suspense: SuspenseBoundary | null
+  /**
+   * suspense pending batch id
+   * @internal
+   */
+  suspenseId: number
+  /**
+   * @internal
+   */
+  asyncDep: Promise<any> | null
+  /**
+   * @internal
+   */
+  asyncResolved: boolean
+
+  // lifecycle
+  isMounted: boolean
+  isUnmounted: boolean
+  isDeactivated: boolean
+  /**
+   * @internal
+   */
+  [LifecycleHooks.BEFORE_CREATE]: LifecycleHook
+  /**
+   * @internal
+   */
+  [LifecycleHooks.CREATED]: LifecycleHook
+  /**
+   * @internal
+   */
+  [LifecycleHooks.BEFORE_MOUNT]: LifecycleHook
+  /**
+   * @internal
+   */
+  [LifecycleHooks.MOUNTED]: LifecycleHook
+  /**
+   * @internal
+   */
+  [LifecycleHooks.BEFORE_UPDATE]: LifecycleHook
+  /**
+   * @internal
+   */
+  [LifecycleHooks.UPDATED]: LifecycleHook
+  /**
+   * @internal
+   */
+  [LifecycleHooks.BEFORE_UNMOUNT]: LifecycleHook
+  /**
+   * @internal
+   */
+  [LifecycleHooks.UNMOUNTED]: LifecycleHook
+  /**
+   * @internal
+   */
+  [LifecycleHooks.RENDER_TRACKED]: LifecycleHook
+  /**
+   * @internal
+   */
+  [LifecycleHooks.RENDER_TRIGGERED]: LifecycleHook
+  /**
+   * @internal
+   */
+  [LifecycleHooks.ACTIVATED]: LifecycleHook
+  /**
+   * @internal
+   */
+  [LifecycleHooks.DEACTIVATED]: LifecycleHook
+  /**
+   * @internal
+   */
+  [LifecycleHooks.ERROR_CAPTURED]: LifecycleHook
+  /**
+   * @internal
+   */
+  [LifecycleHooks.SERVER_PREFETCH]: LifecycleHook<() => Promise<unknown>>
+
+  /**
+   * For caching bound $forceUpdate on public proxy access
+   * @internal
+// ===== vue/runtime-core/apiWatch.ts (3.4.21) =====
+import {
+  type ComputedRef,
+  type DebuggerOptions,
+  type EffectScheduler,
+  ReactiveEffect,
+  ReactiveFlags,
+  type Ref,
+  getCurrentScope,
+  isReactive,
+  isRef,
+  isShallow,
+} from '@vue/reactivity'
+import { type SchedulerJob, queueJob } from './scheduler'
+import {
+  EMPTY_OBJ,
+  NOOP,
+  extend,
+  hasChanged,
+  isArray,
+  isFunction,
+  isMap,
+  isObject,
+  isPlainObject,
+  isSet,
+  isString,
+  remove,
+} from '@vue/shared'
+import {
+  type ComponentInternalInstance,
+  currentInstance,
+  isInSSRComponentSetup,
+  setCurrentInstance,
+} from './component'
+import {
+  ErrorCodes,
+  callWithAsyncErrorHandling,
+  callWithErrorHandling,
+} from './errorHandling'
+import { queuePostRenderEffect } from './renderer'
+import { warn } from './warning'
+import { DeprecationTypes } from './compat/compatConfig'
+import { checkCompatEnabled, isCompatEnabled } from './compat/compatConfig'
+import type { ObjectWatchOptionItem } from './componentOptions'
+import { useSSRContext } from './helpers/useSsrContext'
+
+export type WatchEffect = (onCleanup: OnCleanup) => void
+
+export type WatchSource<T = any> = Ref<T> | ComputedRef<T> | (() => T)
+
+export type WatchCallback<V = any, OV = any> = (
+  value: V,
+  oldValue: OV,
+  onCleanup: OnCleanup,
+) => any
+
+type MapSources<T, Immediate> = {
+  [K in keyof T]: T[K] extends WatchSource<infer V>
+    ? Immediate extends true
+      ? V | undefined
+      : V
+    : T[K] extends object
+      ? Immediate extends true
+        ? T[K] | undefined
+        : T[K]
+      : never
+}
+
+type OnCleanup = (cleanupFn: () => void) => void
+
+export interface WatchOptionsBase extends DebuggerOptions {
+  flush?: 'pre' | 'post' | 'sync'
+}
+
+export interface WatchOptions<Immediate = boolean> extends WatchOptionsBase {
+  immediate?: Immediate
+  deep?: boolean
+  once?: boolean
+}
+
+export type WatchStopHandle = () => void
+
+// Simple effect.
+export function watchEffect(
+  effect: WatchEffect,
+  options?: WatchOptionsBase,
+): WatchStopHandle {
+  return doWatch(effect, null, options)
+}
+
+export function watchPostEffect(
+  effect: WatchEffect,
+  options?: DebuggerOptions,
+) {
+  return doWatch(
+    effect,
+    null,
+    __DEV__ ? extend({}, options as any, { flush: 'post' }) : { flush: 'post' },
+  )
+}
+
+export function watchSyncEffect(
+  effect: WatchEffect,
+  options?: DebuggerOptions,
+) {
+  return doWatch(
+    effect,
+    null,
+    __DEV__ ? extend({}, options as any, { flush: 'sync' }) : { flush: 'sync' },
+  )
+}
+
+// initial value for watchers to trigger on undefined initial values
+const INITIAL_WATCHER_VALUE = {}
+
+type MultiWatchSources = (WatchSource<unknown> | object)[]
+
+// overload: single source + cb
+export function watch<T, Immediate extends Readonly<boolean> = false>(
+  source: WatchSource<T>,
+  cb: WatchCallback<T, Immediate extends true ? T | undefined : T>,
+  options?: WatchOptions<Immediate>,
+): WatchStopHandle
+
+// overload: array of multiple sources + cb
+export function watch<
+  T extends MultiWatchSources,
+  Immediate extends Readonly<boolean> = false,
+>(
+  sources: [...T],
+  cb: WatchCallback<MapSources<T, false>, MapSources<T, Immediate>>,
+  options?: WatchOptions<Immediate>,
+): WatchStopHandle
+
+// overload: multiple sources w/ `as const`
+// watch([foo, bar] as const, () => {})
+// somehow [...T] breaks when the type is readonly
+export function watch<
+  T extends Readonly<MultiWatchSources>,
+  Immediate extends Readonly<boolean> = false,
+>(
+  source: T,
+  cb: WatchCallback<MapSources<T, false>, MapSources<T, Immediate>>,
+  options?: WatchOptions<Immediate>,
+): WatchStopHandle
+
+// overload: watching reactive object w/ cb
+export function watch<
+  T extends object,
+  Immediate extends Readonly<boolean> = false,
+>(
+  source: T,
+  cb: WatchCallback<T, Immediate extends true ? T | undefined : T>,
+  options?: WatchOptions<Immediate>,
+): WatchStopHandle
+
+// implementation
+export function watch<T = any, Immediate extends Readonly<boolean> = false>(
+  source: T | WatchSource<T>,
+  cb: any,
+  options?: WatchOptions<Immediate>,
+): WatchStopHandle {
+  if (__DEV__ && !isFunction(cb)) {
+    warn(
+      `\`watch(fn, options?)\` signature has been moved to a separate API. ` +
+        `Use \`watchEffect(fn, options?)\` instead. \`watch\` now only ` +
+        `supports \`watch(source, cb, options?) signature.`,
+    )
+  }
+  return doWatch(source as any, cb, options)
+}
+
+function doWatch(
+  source: WatchSource | WatchSource[] | WatchEffect | object,
+  cb: WatchCallback | null,
+  {
+    immediate,
+    deep,
+    flush,
+    once,
+    onTrack,
+    onTrigger,
+  }: WatchOptions = EMPTY_OBJ,
+): WatchStopHandle {
+  if (cb && once) {
+    const _cb = cb
+    cb = (...args) => {
+      _cb(...args)
+      unwatch()
+    }
+  }
+
+  // TODO remove in 3.5
+  if (__DEV__ && deep !== void 0 && typeof deep === 'number') {
+    warn(
+      `watch() "deep" option with number value will be used as watch depth in future versions. ` +
+        `Please use a boolean instead to avoid potential breakage.`,
+    )
+  }
+
+  if (__DEV__ && !cb) {
+    if (immediate !== undefined) {
+      warn(
+        `watch() "immediate" option is only respected when using the ` +
+          `watch(source, callback, options?) signature.`,
+      )
+    }
+    if (deep !== undefined) {
+      warn(
+        `watch() "deep" option is only respected when using the ` +
+          `watch(source, callback, options?) signature.`,
+      )
+    }
+    if (once !== undefined) {
+      warn(
+        `watch() "once" option is only respected when using the ` +
+          `watch(source, callback, options?) signature.`,
+      )
+    }
+  }
+
+  const warnInvalidSource = (s: unknown) => {
+    warn(
+      `Invalid watch source: `,
+      s,
+      `A watch source can only be a getter/effect function, a ref, ` +
+        `a reactive object, or an array of these types.`,
+    )
+  }
+
+  const instance = currentInstance
+  const reactiveGetter = (source: object) =>
+    deep === true
+      ? source // traverse will happen in wrapped getter below
+      : // for deep: false, only traverse root-level properties
+        traverse(source, deep === false ? 1 : undefined)
+
+  let getter: () => any
+  let forceTrigger = false
+  let isMultiSource = false
+
+  if (isRef(source)) {
+    getter = () => source.value
+    forceTrigger = isShallow(source)
+  } else if (isReactive(source)) {
+    getter = () => reactiveGetter(source)
+    forceTrigger = true
+  } else if (isArray(source)) {
+    isMultiSource = true
+    forceTrigger = source.some(s => isReactive(s) || isShallow(s))
+    getter = () =>
+      source.map(s => {
+        if (isRef(s)) {
+          return s.value
+        } else if (isReactive(s)) {
+          return reactiveGetter(s)
+        } else if (isFunction(s)) {
+          return callWithErrorHandling(s, instance, ErrorCodes.WATCH_GETTER)
+        } else {
+          __DEV__ && warnInvalidSource(s)
+        }
+      })
+  } else if (isFunction(source)) {
+    if (cb) {
+      // getter with cb
+      getter = () =>
+        callWithErrorHandling(source, instance, ErrorCodes.WATCH_GETTER)
+    } else {
+      // no cb -> simple effect
+      getter = () => {
+        if (cleanup) {
+          cleanup()
+        }
+        return callWithAsyncErrorHandling(
+          source,
+          instance,
+          ErrorCodes.WATCH_CALLBACK,
+          [onCleanup],
+        )
+      }
+    }
+  } else {
+    getter = NOOP
+    __DEV__ && warnInvalidSource(source)
+  }
+
+  // 2.x array mutation watch compat
+  if (__COMPAT__ && cb && !deep) {
+    const baseGetter = getter
+    getter = () => {
+      const val = baseGetter()
+      if (
+        isArray(val) &&
+        checkCompatEnabled(DeprecationTypes.WATCH_ARRAY, instance)
+      ) {
+        traverse(val)
+      }
+      return val
+    }
+  }
+
+  if (cb && deep) {
+    const baseGetter = getter
+    getter = () => traverse(baseGetter())
+  }
+
+  let cleanup: (() => void) | undefined
+  let onCleanup: OnCleanup = (fn: () => void) => {
+    cleanup = effect.onStop = () => {
+      callWithErrorHandling(fn, instance, ErrorCodes.WATCH_CLEANUP)
+      cleanup = effect.onStop = undefined
+    }
+  }
+
+  // in SSR there is no need to setup an actual effect, and it should be noop
+  // unless it's eager or sync flush
+  let ssrCleanup: (() => void)[] | undefined
+  if (__SSR__ && isInSSRComponentSetup) {
+    // we will also not call the invalidate callback (+ runner is not set up)
+    onCleanup = NOOP
+    if (!cb) {
+      getter()
+    } else if (immediate) {
+      callWithAsyncErrorHandling(cb, instance, ErrorCodes.WATCH_CALLBACK, [
+        getter(),
+        isMultiSource ? [] : undefined,
+        onCleanup,
+      ])
+    }
+    if (flush === 'sync') {
+      const ctx = useSSRContext()!
+      ssrCleanup = ctx.__watcherHandles || (ctx.__watcherHandles = [])
+    } else {
+      return NOOP
+    }
+  }
+
+  let oldValue: any = isMultiSource
+    ? new Array((source as []).length).fill(INITIAL_WATCHER_VALUE)
+    : INITIAL_WATCHER_VALUE
+  const job: SchedulerJob = () => {
+    if (!effect.active || !effect.dirty) {
+      return
+    }
+    if (cb) {
+      // watch(source, cb)
+      const newValue = effect.run()
+      if (
+        deep ||
+        forceTrigger ||
+        (isMultiSource
+          ? (newValue as any[]).some((v, i) => hasChanged(v, oldValue[i]))
+          : hasChanged(newValue, oldValue)) ||
+        (__COMPAT__ &&
+          isArray(newValue) &&
+          isCompatEnabled(DeprecationTypes.WATCH_ARRAY, instance))
+      ) {
+        // cleanup before running cb again
+        if (cleanup) {
+          cleanup()
+        }
+        callWithAsyncErrorHandling(cb, instance, ErrorCodes.WATCH_CALLBACK, [
+          newValue,
+          // pass undefined as the old value when it's changed for the first time
+          oldValue === INITIAL_WATCHER_VALUE
+            ? undefined
+            : isMultiSource && oldValue[0] === INITIAL_WATCHER_VALUE
+              ? []
+              : oldValue,
+          onCleanup,
+        ])
+        oldValue = newValue
+      }
+    } else {
+      // watchEffect
+      effect.run()
+    }
+  }
+
+  // important: mark the job as a watcher callback so that scheduler knows
+  // it is allowed to self-trigger (#1727)
+  job.allowRecurse = !!cb
+
+  let scheduler: EffectScheduler
+  if (flush === 'sync') {
+    scheduler = job as any // the scheduler function gets called directly
+  } else if (flush === 'post') {
+    scheduler = () => queuePostRenderEffect(job, instance && instance.suspense)
+  } else {
+    // default: 'pre'
+    job.pre = true
+    if (instance) job.id = instance.uid
+    scheduler = () => queueJob(job)
+  }
+
+  const effect = new ReactiveEffect(getter, NOOP, scheduler)
+
+  const scope = getCurrentScope()
+  const unwatch = () => {
+    effect.stop()
+    if (scope) {
+      remove(scope.effects, effect)
+    }
+  }
+
+  if (__DEV__) {
+    effect.onTrack = onTrack
+    effect.onTrigger = onTrigger
+  }
+
+  // initial run
+  if (cb) {
+    if (immediate) {
+      job()
+    } else {
+      oldValue = effect.run()
+    }
+  } else if (flush === 'post') {
+    queuePostRenderEffect(
+      effect.run.bind(effect),
+      instance && instance.suspense,
+    )
+  } else {
+    effect.run()
+  }
+
+  if (__SSR__ && ssrCleanup) ssrCleanup.push(unwatch)
+  return unwatch
+}
+
+// this.$watch
+export function instanceWatch(
+  this: ComponentInternalInstance,
+  source: string | Function,
+  value: WatchCallback | ObjectWatchOptionItem,
+  options?: WatchOptions,
+): WatchStopHandle {
+  const publicThis = this.proxy as any
+  const getter = isString(source)
+    ? source.includes('.')
+      ? createPathGetter(publicThis, source)
+      : () => publicThis[source]
+    : source.bind(publicThis, publicThis)
+  let cb
+  if (isFunction(value)) {
+    cb = value
+  } else {
+    cb = value.handler as Function
+    options = value
+  }
+  const reset = setCurrentInstance(this)
+  const res = doWatch(getter, cb.bind(publicThis), options)
+  reset()
+  return res
+}
+
+export function createPathGetter(ctx: any, path: string) {
+  const segments = path.split('.')
+  return () => {
+    let cur = ctx
+    for (let i = 0; i < segments.length && cur; i++) {
+      cur = cur[segments[i]]
+    }
+    return cur
+  }
+}
+
+export function traverse(
+  value: unknown,
+  depth?: number,
+  currentDepth = 0,
+  seen?: Set<unknown>,
+) {
+  if (!isObject(value) || (value as any)[ReactiveFlags.SKIP]) {
+    return value
+  }
+
+  if (depth && depth > 0) {
+    if (currentDepth >= depth) {
+      return value
+    }
+// ===== bootstrap/examples/checkout/index.html (5.3.3) =====
+---
+layout: examples
+title: Checkout example
+extra_css:
+  - "checkout.css"
+extra_js:
+  - src: "checkout.js"
+body_class: "bg-body-tertiary"
+---
+
+<div class="container">
+  <main>
+    <div class="py-5 text-center">
+      <img class="d-block mx-auto mb-4" src="/docs/{{< param docs_version >}}/assets/brand/bootstrap-logo.svg" alt="" width="72" height="57">
+      <h2>Checkout form</h2>
+      <p class="lead">Below is an example form built entirely with Bootstrap’s form controls. Each required form group has a validation state that can be triggered by attempting to submit the form without completing it.</p>
+    </div>
+
+    <div class="row g-5">
+      <div class="col-md-5 col-lg-4 order-md-last">
+        <h4 class="d-flex justify-content-between align-items-center mb-3">
+          <span class="text-primary">Your cart</span>
+          <span class="badge bg-primary rounded-pill">3</span>
+        </h4>
+        <ul class="list-group mb-3">
+          <li class="list-group-item d-flex justify-content-between lh-sm">
+            <div>
+              <h6 class="my-0">Product name</h6>
+              <small class="text-body-secondary">Brief description</small>
+            </div>
+            <span class="text-body-secondary">$12</span>
+          </li>
+          <li class="list-group-item d-flex justify-content-between lh-sm">
+            <div>
+              <h6 class="my-0">Second product</h6>
+              <small class="text-body-secondary">Brief description</small>
+            </div>
+            <span class="text-body-secondary">$8</span>
+          </li>
+          <li class="list-group-item d-flex justify-content-between lh-sm">
+            <div>
+              <h6 class="my-0">Third item</h6>
+              <small class="text-body-secondary">Brief description</small>
+            </div>
+            <span class="text-body-secondary">$5</span>
+          </li>
+          <li class="list-group-item d-flex justify-content-between bg-body-tertiary">
+            <div class="text-success">
+              <h6 class="my-0">Promo code</h6>
+              <small>EXAMPLECODE</small>
+            </div>
+            <span class="text-success">−$5</span>
+          </li>
+          <li class="list-group-item d-flex justify-content-between">
+            <span>Total (USD)</span>
+            <strong>$20</strong>
+          </li>
+        </ul>
+
+        <form class="card p-2">
+          <div class="input-group">
+            <input type="text" class="form-control" placeholder="Promo code">
+            <button type="submit" class="btn btn-secondary">Redeem</button>
+          </div>
+        </form>
+      </div>
+      <div class="col-md-7 col-lg-8">
+        <h4 class="mb-3">Billing address</h4>
+        <form class="needs-validation" novalidate>
+          <div class="row g-3">
+            <div class="col-sm-6">
+              <label for="firstName" class="form-label">First name</label>
+              <input type="text" class="form-control" id="firstName" placeholder="" value="" required>
+              <div class="invalid-feedback">
+                Valid first name is required.
+              </div>
+            </div>
+
+            <div class="col-sm-6">
+              <label for="lastName" class="form-label">Last name</label>
+              <input type="text" class="form-control" id="lastName" placeholder="" value="" required>
+              <div class="invalid-feedback">
+                Valid last name is required.
+              </div>
+            </div>
+
+            <div class="col-12">
+              <label for="username" class="form-label">Username</label>
+              <div class="input-group has-validation">
+                <span class="input-group-text">@</span>
+                <input type="text" class="form-control" id="username" placeholder="Username" required>
+              <div class="invalid-feedback">
+                  Your username is required.
+                </div>
+              </div>
+            </div>
+
+            <div class="col-12">
+              <label for="email" class="form-label">Email <span class="text-body-secondary">(Optional)</span></label>
+              <input type="email" class="form-control" id="email" placeholder="you@example.com">
+              <div class="invalid-feedback">
+                Please enter a valid email address for shipping updates.
+              </div>
+            </div>
+
+            <div class="col-12">
+              <label for="address" class="form-label">Address</label>
+              <input type="text" class="form-control" id="address" placeholder="1234 Main St" required>
+              <div class="invalid-feedback">
+                Please enter your shipping address.
+              </div>
+            </div>
+
+            <div class="col-12">
+              <label for="address2" class="form-label">Address 2 <span class="text-body-secondary">(Optional)</span></label>
+              <input type="text" class="form-control" id="address2" placeholder="Apartment or suite">
+            </div>
+
+            <div class="col-md-5">
+              <label for="country" class="form-label">Country</label>
+              <select class="form-select" id="country" required>
+                <option value="">Choose...</option>
+                <option>United States</option>
+              </select>
+              <div class="invalid-feedback">
+                Please select a valid country.
+              </div>
+            </div>
+
+            <div class="col-md-4">
+              <label for="state" class="form-label">State</label>
+              <select class="form-select" id="state" required>
+                <option value="">Choose...</option>
+                <option>California</option>
+              </select>
+              <div class="invalid-feedback">
+                Please provide a valid state.
+              </div>
+            </div>
+
+            <div class="col-md-3">
+              <label for="zip" class="form-label">Zip</label>
+              <input type="text" class="form-control" id="zip" placeholder="" required>
+              <div class="invalid-feedback">
+                Zip code required.
+              </div>
+            </div>
+          </div>
+
+          <hr class="my-4">
+
+          <div class="form-check">
+            <input type="checkbox" class="form-check-input" id="same-address">
+            <label class="form-check-label" for="same-address">Shipping address is the same as my billing address</label>
+          </div>
+
+          <div class="form-check">
+            <input type="checkbox" class="form-check-input" id="save-info">
+            <label class="form-check-label" for="save-info">Save this information for next time</label>
+          </div>
+
+          <hr class="my-4">
+
+          <h4 class="mb-3">Payment</h4>
+
+          <div class="my-3">
+            <div class="form-check">
+              <input id="credit" name="paymentMethod" type="radio" class="form-check-input" checked required>
+              <label class="form-check-label" for="credit">Credit card</label>
+            </div>
+            <div class="form-check">
+              <input id="debit" name="paymentMethod" type="radio" class="form-check-input" required>
+              <label class="form-check-label" for="debit">Debit card</label>
+            </div>
+            <div class="form-check">
+              <input id="paypal" name="paymentMethod" type="radio" class="form-check-input" required>
+              <label class="form-check-label" for="paypal">PayPal</label>
+            </div>
+          </div>
+
+          <div class="row gy-3">
+            <div class="col-md-6">
+              <label for="cc-name" class="form-label">Name on card</label>
+              <input type="text" class="form-control" id="cc-name" placeholder="" required>
+              <small class="text-body-secondary">Full name as displayed on card</small>
+              <div class="invalid-feedback">
+                Name on card is required
+              </div>
+            </div>
+
+            <div class="col-md-6">
+              <label for="cc-number" class="form-label">Credit card number</label>
+              <input type="text" class="form-control" id="cc-number" placeholder="" required>
+              <div class="invalid-feedback">
+                Credit card number is required
+              </div>
+            </div>
+
+            <div class="col-md-3">
+              <label for="cc-expiration" class="form-label">Expiration</label>
+              <input type="text" class="form-control" id="cc-expiration" placeholder="" required>
+              <div class="invalid-feedback">
+                Expiration date required
+              </div>
+            </div>
+
+            <div class="col-md-3">
+              <label for="cc-cvv" class="form-label">CVV</label>
+              <input type="text" class="form-control" id="cc-cvv" placeholder="" required>
+              <div class="invalid-feedback">
+                Security code required
+              </div>
+            </div>
+          </div>
+
+          <hr class="my-4">
+
+          <button class="w-100 btn btn-primary btn-lg" type="submit">Continue to checkout</button>
+        </form>
+      </div>
+    </div>
+  </main>
+
+  <footer class="my-5 pt-5 text-body-secondary text-center text-small">
+    <p class="mb-1">&copy; 2017–{{< year >}} Company Name</p>
+    <ul class="list-inline">
+      <li class="list-inline-item"><a href="#">Privacy</a></li>
+      <li class="list-inline-item"><a href="#">Terms</a></li>
+      <li class="list-inline-item"><a href="#">Support</a></li>
+    </ul>
+  </footer>
+</div>

@@ -2689,3 +2689,44 @@ fn bug25_mutex_poison_does_not_brick_regex() {
     drop(first);
 }
 
+const NESTED_LOOKAROUND_PAT: &str = r"(?<!x.*),?(.+)";
+
+fn basket_haystack() -> Vec<u8> {
+    std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../data/haystacks/js-ts-html-basket.txt"
+    ))
+    .expect("haystack file")
+}
+
+#[test]
+fn nested_unbounded_lookaround_anchor_limit() {
+    let mut opts = RegexOptions::default().unicode(resharp::UnicodeMode::Javascript);
+    opts.lookahead_context_max = 40;
+    let re = Regex::with_options(NESTED_LOOKAROUND_PAT, opts).expect("compile");
+    let result = re.find_all(&basket_haystack());
+    let err = result.expect_err("expected AnchorLimit error on large haystack");
+    assert!(
+        matches!(err, Error::Algebra(_)) && err.to_string().contains("anchor limit"),
+        "expected anchor limit error, got: {err:?}"
+    );
+}
+
+// #[test]
+// fn bug_nested_unbounded_lookaround_oom() {
+//     // let opts = RegexOptions::default().unicode(resharp::UnicodeMode::Javascript);
+//     let opts = RegexOptions::default().unicode(resharp::UnicodeMode::Default);
+//     let re = Regex::with_options(NESTED_LOOKAROUND_PAT, opts).expect("compile");
+//     let hay = basket_haystack();
+//     let (tx, rx) = std::sync::mpsc::channel();
+//     std::thread::spawn(move || {
+//         let _ = tx.send(re.find_all(&hay).is_ok());
+//     });
+//     match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+//         Ok(_) => {}
+//         Err(_) => panic!(
+//             "find_all did not return within 5s on a 92KB haystack: unbounded memory growth (engine bug)"
+//         ),
+//     }
+// }
+
