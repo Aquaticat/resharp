@@ -1,15 +1,11 @@
-use resharp_algebra::nulls::{Nullability, NullsId};
+use resharp_algebra::nulls::{
+    EID_ALWAYS0, EID_BEGIN0, EID_CENTER0, EID_END0, EID_NONE, Nullability,
+};
 use resharp_algebra::RegexBuilder;
 use rustc_hash::FxHashMap;
 
 use crate::engine::{DFA_DEAD, DFA_INITIAL, LDFA};
 use crate::{Error, Match};
-
-const EID_NONE: u32 = NullsId::EMPTY.0;
-const EID_CENTER0: u32 = NullsId::CENTER0.0;
-const EID_ALWAYS0: u32 = NullsId::ALWAYS0.0;
-const EID_BEGIN0: u32 = NullsId::BEGIN0.0;
-const EID_END0: u32 = NullsId::END0.0;
 
 pub const FAS_ACTION_MISSING: u32 = u32::MAX;
 pub const FAS_DIED: u16 = 0xFFFF;

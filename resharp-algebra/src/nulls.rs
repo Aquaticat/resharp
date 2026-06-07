@@ -90,6 +90,85 @@ impl NullsId {
     pub const END0: NullsId = NullsId(4);
 }
 
+pub const EID_NONE: u32 = NullsId::EMPTY.0;
+pub const EID_CENTER0: u32 = NullsId::CENTER0.0;
+pub const EID_ALWAYS0: u32 = NullsId::ALWAYS0.0;
+pub const EID_BEGIN0: u32 = NullsId::BEGIN0.0;
+pub const EID_END0: u32 = NullsId::END0.0;
+
+pub fn has_any_null(
+    effects_id: &[u16],
+    effects: &[Vec<NullState>],
+    state: u32,
+    mask: Nullability,
+) -> bool {
+    let eid = effects_id[state as usize] as u32;
+    if eid == 0 {
+        return false;
+    }
+    if eid == EID_ALWAYS0 {
+        return mask.has(Nullability::ALWAYS);
+    }
+    if eid == EID_CENTER0 {
+        return mask.has(Nullability::CENTER);
+    }
+    effects[eid as usize].iter().any(|n| n.mask.has(mask))
+}
+
+#[inline(always)]
+pub fn collect_nulls(
+    effects_id: &[u16],
+    effects: &[Vec<NullState>],
+    state: u32,
+    pos: usize,
+    mask: Nullability,
+    nulls: &mut Vec<usize>,
+) {
+    let eid = effects_id[state as usize] as u32;
+    if eid != 0 {
+        match eid {
+            EID_ALWAYS0 => {
+                if mask.has(Nullability::ALWAYS) {
+                    nulls.push(pos);
+                }
+            }
+            EID_CENTER0 => {
+                if mask.has(Nullability::CENTER) {
+                    nulls.push(pos);
+                }
+            }
+            EID_BEGIN0 => {
+                if mask.has(Nullability::BEGIN) {
+                    nulls.push(pos);
+                }
+            }
+            EID_END0 => {
+                if mask.has(Nullability::END) {
+                    nulls.push(pos);
+                }
+            }
+            _ => {
+                let start = nulls.len();
+                for n in &effects[eid as usize] {
+                    if n.mask.has(mask) {
+                        let resolved = pos + n.rel as usize;
+                        #[cfg(debug_assertions)]
+                        if nulls[start..].contains(&resolved) {
+                            let eff = &effects[eid as usize];
+                            panic!(
+                                "unexpected duplicate match position {resolved} from {eff:?}, this is a bug, please file an issue with the pattern",
+                            );
+                        }
+                        if !nulls[start..].contains(&resolved) {
+                            nulls.push(resolved);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 use std::{collections::BTreeSet, hash::Hash};
 
 #[repr(u8)]

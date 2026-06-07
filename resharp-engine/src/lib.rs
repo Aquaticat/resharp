@@ -50,6 +50,7 @@ pub(crate) mod accel;
 pub(crate) mod bdfa;
 pub(crate) mod engine;
 pub(crate) mod fas;
+pub(crate) mod minterms;
 pub(crate) mod fwd;
 pub(crate) mod prefix;
 pub(crate) mod stream;

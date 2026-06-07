@@ -4,7 +4,7 @@ use resharp_algebra::nulls::Nullability;
 use resharp_algebra::solver::{Solver, TSetId};
 use resharp_algebra::{Kind, NodeId, RegexBuilder};
 
-use crate::engine::{collect_sets, transition_term, PartitionTree};
+use crate::minterms::{collect_sets, transition_term, PartitionTree};
 use crate::{Error, Match, Regex};
 
 const RARE_BYTE_FREQ_LIMIT: u16 = 25_000;

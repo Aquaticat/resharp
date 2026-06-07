@@ -2,11 +2,15 @@ use std::collections::{HashMap, HashSet};
 
 use rustc_hash::FxHashMap;
 
-use resharp_algebra::nulls::{NullState, Nullability, NullsId};
+use resharp_algebra::nulls::{
+    EID_BEGIN0, EID_CENTER0, EID_END0, EID_NONE, NullState, Nullability, NullsId, collect_nulls,
+};
+pub(crate) use resharp_algebra::nulls::has_any_null;
 use resharp_algebra::solver::{Solver, TSetId};
-use resharp_algebra::{Kind, NodeId, RegexBuilder, TRegex, TRegexId};
+use resharp_algebra::{NodeId, RegexBuilder};
 
 use crate::accel::MintermSearchValue;
+use crate::minterms::{collect_sets, collect_tregex_leaves, transition_term, PartitionTree};
 use crate::{Error, Match};
 
 pub const NO_MATCH: usize = usize::MAX;
@@ -32,162 +36,6 @@ fn center_or_end(at_end: bool) -> Nullability {
 #[inline(always)]
 fn dfa_delta(state: u32, mt: u32, mt_log: u32) -> usize {
     (state << mt_log | mt) as usize
-}
-
-pub(crate) struct PartitionTree {
-    sets: Vec<TSetId>,
-    lefts: Vec<u32>,
-    rights: Vec<u32>,
-}
-
-impl PartitionTree {
-    const NO_CHILD: u32 = u32::MAX;
-
-    fn new(set: TSetId) -> PartitionTree {
-        PartitionTree {
-            sets: vec![set],
-            lefts: vec![Self::NO_CHILD],
-            rights: vec![Self::NO_CHILD],
-        }
-    }
-
-    fn push(&mut self, set: TSetId) -> u32 {
-        let idx = self.sets.len() as u32;
-        self.sets.push(set);
-        self.lefts.push(Self::NO_CHILD);
-        self.rights.push(Self::NO_CHILD);
-        idx
-    }
-
-    fn refine(&mut self, idx: u32, other: TSetId, solver: &mut Solver) {
-        let set = self.sets[idx as usize];
-        let this_and_other = solver.and_id(set, other);
-        if this_and_other != TSetId::EMPTY {
-            let notother = solver.not_id(other);
-            let this_minus_other = solver.and_id(set, notother);
-            if this_minus_other != TSetId::EMPTY {
-                if self.lefts[idx as usize] == Self::NO_CHILD {
-                    let l = self.push(this_and_other);
-                    let r = self.push(this_minus_other);
-                    self.lefts[idx as usize] = l;
-                    self.rights[idx as usize] = r;
-                } else {
-                    let l = self.lefts[idx as usize];
-                    let r = self.rights[idx as usize];
-                    self.refine(l, other, solver);
-                    self.refine(r, other, solver);
-                }
-            }
-        }
-    }
-
-    fn get_leaf_sets(&self) -> Vec<TSetId> {
-        let mut leaves = Vec::new();
-        let mut stack = vec![0u32];
-        while let Some(idx) = stack.pop() {
-            if self.lefts[idx as usize] == Self::NO_CHILD {
-                leaves.push(self.sets[idx as usize]);
-            } else {
-                stack.push(self.lefts[idx as usize]);
-                stack.push(self.rights[idx as usize]);
-            }
-        }
-        leaves
-    }
-
-    pub fn generate_minterms(sets: HashSet<TSetId>, solver: &mut Solver) -> Vec<TSetId> {
-        let mut pt = PartitionTree::new(TSetId::FULL);
-        for set in sets {
-            pt.refine(0, set, solver);
-        }
-        let mut lsets = pt.get_leaf_sets();
-        lsets[1..].sort();
-        lsets
-    }
-
-    pub fn minterms_lookup(minterms: &[TSetId], solver: &mut Solver) -> [u8; 256] {
-        let mut lookup = [0u8; 256];
-        if minterms.len() <= 1 {
-            return lookup;
-        }
-        let mut mt_index = 1u8;
-        for m in minterms.iter().skip(1) {
-            for i in 0..4 {
-                for j in 0..64 {
-                    let nthbit = 1u64 << j;
-                    if solver.has_bit_set(*m, i, nthbit) {
-                        let cc = (i * 64 + j) as u8;
-                        lookup[cc as usize] = mt_index;
-                    }
-                }
-            }
-            mt_index += 1;
-        }
-        lookup
-    }
-}
-
-pub fn collect_sets(b: &RegexBuilder, start_id: NodeId) -> HashSet<TSetId> {
-    let mut visited = HashSet::new();
-    let mut sets = HashSet::new();
-    let mut stack = vec![start_id];
-    while let Some(node_id) = stack.pop() {
-        if visited.contains(&node_id) {
-            continue;
-        }
-        visited.insert(node_id);
-        match b.get_kind(node_id) {
-            Kind::Begin | Kind::End => {}
-            Kind::Pred => {
-                sets.insert(node_id.pred_tset(b));
-            }
-            Kind::Union | Kind::Concat | Kind::Inter => {
-                stack.push(node_id.left(b));
-                stack.push(node_id.right(b));
-            }
-            Kind::Lookahead | Kind::Lookbehind | Kind::Ordered => {
-                stack.push(node_id.left(b));
-                stack.push(node_id.right(b));
-            }
-            Kind::Star | Kind::Compl => {
-                stack.push(node_id.left(b));
-            }
-        }
-    }
-    sets
-}
-
-pub fn transition_term(b: &mut RegexBuilder, der: TRegexId, set: TSetId) -> NodeId {
-    let mut term = b.get_tregex(der);
-    loop {
-        match *term {
-            TRegex::Leaf(node_id) => return node_id,
-            TRegex::ITE(cond, _then, _else) => {
-                if b.solver().is_sat_id(set, cond) {
-                    term = b.get_tregex(_then);
-                } else {
-                    term = b.get_tregex(_else);
-                }
-            }
-        }
-    }
-}
-
-pub(crate) fn collect_tregex_leaves(b: &RegexBuilder, tregex: TRegexId, out: &mut Vec<NodeId>) {
-    let mut stack = vec![tregex];
-    let mut visited = HashSet::new();
-    while let Some(id) = stack.pop() {
-        if !visited.insert(id) {
-            continue;
-        }
-        match *b.get_tregex(id) {
-            TRegex::Leaf(node_id) => out.push(node_id),
-            TRegex::ITE(_, then_br, else_br) => {
-                stack.push(then_br);
-                stack.push(else_br);
-            }
-        }
-    }
 }
 
 const SKIP_FREQ_THRESHOLD: u32 = 75_000;
@@ -1526,87 +1374,6 @@ impl LDFA {
         let effect = self.effects_id[new_state as usize] as u32;
         collect_rev_complex(self.effects.as_ptr(), effect, 0, Nullability::END, nulls);
         Ok(())
-    }
-}
-
-pub(crate) fn has_any_null(
-    effects_id: &[u16],
-    effects: &[Vec<NullState>],
-    state: u32,
-    mask: Nullability,
-) -> bool {
-    let eid = effects_id[state as usize] as u32;
-    if eid == 0 {
-        return false;
-    }
-    if eid == EID_ALWAYS0 {
-        return mask.has(Nullability::ALWAYS);
-    }
-    if eid == EID_CENTER0 {
-        return mask.has(Nullability::CENTER);
-    }
-    effects[eid as usize].iter().any(|n| n.mask.has(mask))
-}
-
-// same as resharp-algebra/src/nulls.rs, just explicit
-const EID_NONE: u32 = NullsId::EMPTY.0;
-const EID_CENTER0: u32 = NullsId::CENTER0.0;
-const EID_ALWAYS0: u32 = NullsId::ALWAYS0.0;
-const EID_BEGIN0: u32 = NullsId::BEGIN0.0;
-const EID_END0: u32 = NullsId::END0.0;
-
-#[inline(always)]
-fn collect_nulls(
-    effects_id: &[u16],
-    effects: &[Vec<NullState>],
-    state: u32,
-    pos: usize,
-    mask: Nullability,
-    nulls: &mut Vec<usize>,
-) {
-    let eid = effects_id[state as usize] as u32;
-    if eid != 0 {
-        match eid {
-            EID_ALWAYS0 => {
-                if mask.has(Nullability::ALWAYS) {
-                    nulls.push(pos);
-                }
-            }
-            EID_CENTER0 => {
-                if mask.has(Nullability::CENTER) {
-                    nulls.push(pos);
-                }
-            }
-            EID_BEGIN0 => {
-                if mask.has(Nullability::BEGIN) {
-                    nulls.push(pos);
-                }
-            }
-            EID_END0 => {
-                if mask.has(Nullability::END) {
-                    nulls.push(pos);
-                }
-            }
-            _ => {
-                let start = nulls.len();
-                for n in &effects[eid as usize] {
-                    if n.mask.has(mask) {
-                        let resolved = pos + n.rel as usize;
-                        #[cfg(debug_assertions)]
-                        if nulls[start..].contains(&resolved) {
-                            let eff = &effects[eid as usize];
-                            panic!(
-                                "unexpected duplicate match position {resolved} from {eff:?}, this is a bug, please file an issue with the pattern",
-                            );
-                        }
-                        // TODO: drop it once confidence is high that the effects generation is correct
-                        if !nulls[start..].contains(&resolved) {
-                            nulls.push(resolved);
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 
