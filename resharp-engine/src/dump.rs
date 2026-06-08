@@ -9,7 +9,7 @@ use resharp_algebra::{NodeId, RegexBuilder};
 use serde::{Deserialize, Serialize};
 
 use crate::bdfa::BDFA;
-use crate::engine::{DFA_DEAD, LDFA};
+use crate::ldfa::{DFA_DEAD, LDFA};
 use crate::prefix::PrefixKind;
 use crate::stream::{StreamCache, StreamInit};
 use crate::{Error, FindAll, Match, Regex, RegexInner};

@@ -1,4 +1,24 @@
 mod common;
+
+#[test]
+fn bounded_repeat_lookahead_no_compile_blowup() {
+    let pat = r"(?:#)([A-Za-z0-9_](?:(?:[A-Za-z0-9_]|(?:\.(?!\.))){0,28}(?:[A-Za-z0-9_]))?)";
+    let t = std::time::Instant::now();
+    let re = Regex::new(pat).expect("compile");
+    assert!(
+        t.elapsed() < std::time::Duration::from_secs(2),
+        "compile of bounded-repeat-with-lookahead took {:?}, expected sub-second",
+        t.elapsed()
+    );
+    let hay = b"#hello.world.foo bar #a.b..c #x";
+    let m = re.find_all(hay).unwrap();
+    let got: Vec<&str> = m
+        .iter()
+        .map(|x| std::str::from_utf8(&hay[x.start..x.end]).unwrap())
+        .collect();
+    assert_eq!(got, vec!["#hello.world.foo", "#a.b", "#x"]);
+}
+
 use common::schemas::{EngineCase, EngineFile, InternalFile};
 use resharp::{Error, Regex, RegexOptions};
 use std::path::Path;

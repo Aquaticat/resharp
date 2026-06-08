@@ -1,8 +1,8 @@
 #![allow(dead_code)]
-use crate::{accel::FwdPrefixSearch, engine, Error, Match, Regex, RegexBuilder};
+use crate::{accel::FwdPrefixSearch, ldfa, Error, Match, Regex, RegexBuilder};
 
 fn fwd_prefix_impl<const IS_MATCH: bool>(
-    fwd: &mut engine::LDFA,
+    fwd: &mut ldfa::LDFA,
     b: &mut RegexBuilder,
     fixed_length: Option<u32>,
     has_anchors: bool,
@@ -67,7 +67,7 @@ fn fwd_prefix_impl<const IS_MATCH: bool>(
 }
 
 fn try_emit_zero_width<const IS_MATCH: bool>(
-    fwd: &mut engine::LDFA,
+    fwd: &mut ldfa::LDFA,
     b: &mut RegexBuilder,
     lb_len: usize,
     fwd_prefix: &FwdPrefixSearch,
@@ -82,7 +82,7 @@ fn try_emit_zero_width<const IS_MATCH: bool>(
     if fwd_prefix.find_fwd(input, lb_pos) != Some(lb_pos) {
         return Ok(false);
     }
-    if fwd.scan_fwd_from(b, engine::DFA_INITIAL as u32, at, input)? == Some(at) {
+    if fwd.scan_fwd_from(b, ldfa::DFA_INITIAL as u32, at, input)? == Some(at) {
         if IS_MATCH {
             return Ok(true);
         }
@@ -92,7 +92,7 @@ fn try_emit_zero_width<const IS_MATCH: bool>(
 }
 
 fn fwd_lb_prefix_impl<const IS_MATCH: bool>(
-    fwd: &mut engine::LDFA,
+    fwd: &mut ldfa::LDFA,
     b: &mut RegexBuilder,
     lb_len: usize,
     fwd_lb_begin_nullable: bool,
@@ -125,7 +125,7 @@ fn fwd_lb_prefix_impl<const IS_MATCH: bool>(
         let body_start = candidate + lb_len;
         if let Some(max_end) = fwd.scan_fwd_from(
             b,
-            engine::DFA_INITIAL as u32,
+            ldfa::DFA_INITIAL as u32,
             body_start,
             input,
         )? {

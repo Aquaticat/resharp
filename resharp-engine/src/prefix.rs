@@ -803,7 +803,7 @@ pub(crate) fn select_prefix(
     );
     #[cfg(feature = "convergence_prefix")]
     if !fwd_already {
-        let mut conv_ldfa = match crate::engine::LDFA::new_rev(b, rev_start, max_cap) {
+        let mut conv_ldfa = match crate::ldfa::LDFA::new_rev(b, rev_start, max_cap) {
             Ok(l) => l,
             Err(_) => return Ok((kind, skip)),
         };
@@ -822,7 +822,7 @@ pub(crate) fn select_prefix(
 fn try_convergence_prefix(
     b: &mut RegexBuilder,
     fwd_node: NodeId,
-    rev_ldfa: &mut crate::engine::LDFA,
+    rev_ldfa: &mut crate::ldfa::LDFA,
     rev_start: NodeId,
 ) -> Result<Option<(PrefixKind, crate::accel::RevTeddySearch)>, Error> {
     const MAX_DEPTH: u32 = 12;

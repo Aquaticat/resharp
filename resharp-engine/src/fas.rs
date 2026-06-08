@@ -4,7 +4,7 @@ use resharp_algebra::nulls::{
 use resharp_algebra::RegexBuilder;
 use rustc_hash::FxHashMap;
 
-use crate::engine::{DFA_DEAD, DFA_INITIAL, LDFA};
+use crate::ldfa::{DFA_DEAD, DFA_INITIAL, LDFA};
 use crate::{Error, Match};
 
 pub const FAS_ACTION_MISSING: u32 = u32::MAX;

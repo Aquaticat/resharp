@@ -167,6 +167,23 @@ pub enum Kind {
     Ordered,
 }
 
+#[derive(Clone, Copy)]
+struct NodeLen {
+    mml_min: u32,
+    mml_max: u32,
+    es_null: Nullability,
+}
+
+impl Default for NodeLen {
+    fn default() -> Self {
+        NodeLen {
+            mml_min: 0,
+            mml_max: 0,
+            es_null: Nullability::NEVER,
+        }
+    }
+}
+
 #[derive(Eq, Hash, PartialEq, Clone)]
 struct Metadata {
     flags: MetaFlags,
@@ -312,6 +329,7 @@ pub struct RegexBuilder {
     metadata: Vec<MetadataId>,
     reversed: Vec<NodeId>,
     cache_empty: FxHashMap<NodeId, NodeFlags>,
+    lengths: Vec<NodeLen>,
     tr_cache: FxHashMap<TRegex<TSetId>, TRegexId>,
     tr_array: Vec<TRegex<TSetId>>,
     tr_der_center: Vec<TRegexId>,
@@ -620,6 +638,7 @@ impl RegexBuilder {
             array: Vec::new(),
             index: FxHashMap::default(),
             cache_empty: FxHashMap::default(),
+            lengths: vec![NodeLen::default()],
             tr_array: Vec::new(),
             tr_cache: FxHashMap::default(),
             flags: BuilderFlags::ZERO,
@@ -1040,45 +1059,92 @@ impl RegexBuilder {
     }
 
     pub fn get_min_max_length(&self, node_id: NodeId) -> (u32, u32) {
-        if self.is_infinite(node_id) {
-            if node_id.is_inter(self) {
-                self.get_bounded_length(node_id)
-            } else {
-                (self.get_min_length_only(node_id), u32::MAX)
+        let nl = &self.lengths[node_id.0 as usize];
+        (nl.mml_min, nl.mml_max)
+    }
+
+    #[inline]
+    fn mml_of(&self, node_id: NodeId) -> (u32, u32) {
+        let nl = &self.lengths[node_id.0 as usize];
+        (nl.mml_min, nl.mml_max)
+    }
+
+    fn compute_node_len(&self, node_id: NodeId) -> NodeLen {
+        let es_null = self.compute_es_null(node_id);
+        if node_id == NodeId::EPS {
+            return NodeLen {
+                mml_min: 0,
+                mml_max: 0,
+                es_null,
+            };
+        }
+        let kind = self.get_kind(node_id);
+        let l = node_id.left(self);
+        let r = node_id.right(self);
+        let min_of = |n: NodeId| self.lengths[n.0 as usize].mml_min;
+
+        let mml_min = match kind {
+            Kind::End | Kind::Begin => 0,
+            Kind::Pred => 1,
+            Kind::Concat => min_of(l) + min_of(r),
+            Kind::Union => min_of(l).min(min_of(r)),
+            Kind::Inter => min_of(l).max(min_of(r)),
+            Kind::Star | Kind::Lookbehind | Kind::Lookahead => 0,
+            Kind::Ordered => min_of(l),
+            Kind::Compl => {
+                if self.nullability(l) == Nullability::ALWAYS {
+                    1
+                } else {
+                    0
+                }
             }
+        };
+
+        let bounded_max = match kind {
+            Kind::End | Kind::Begin => 0,
+            Kind::Pred => 1,
+            Kind::Concat => self.mml_of(l).1.saturating_add(self.mml_of(r).1),
+            Kind::Union => self.mml_of(l).1.max(self.mml_of(r).1),
+            Kind::Inter => self.mml_of(l).1.min(self.mml_of(r).1),
+            Kind::Lookahead => self.mml_of(r.missing_to_eps()).1,
+            Kind::Ordered => self.mml_of(l).1,
+            Kind::Star | Kind::Compl => u32::MAX,
+            Kind::Lookbehind => self.mml_of(r.missing_to_eps()).1,
+        };
+
+        let mml_max = if self.is_infinite(node_id) && kind != Kind::Inter {
+            u32::MAX
         } else {
-            self.get_bounded_length(node_id)
+            bounded_max
+        };
+
+        NodeLen {
+            mml_min,
+            mml_max,
+            es_null,
         }
     }
 
-    fn get_bounded_length(&self, node_id: NodeId) -> (u32, u32) {
-        if node_id == NodeId::EPS {
-            return (0, 0);
-        }
+    fn compute_es_null(&self, node_id: NodeId) -> Nullability {
+        let es = |n: NodeId| self.lengths[n.0 as usize].es_null;
         match self.get_kind(node_id) {
-            Kind::End | Kind::Begin => (0, 0),
-            Kind::Pred => (1, 1),
-            Kind::Concat => {
-                let (lmin, lmax) = self.get_bounded_length(node_id.left(self));
-                let (rmin, rmax) = self.get_bounded_length(node_id.right(self));
-                (lmin + rmin, lmax.saturating_add(rmax))
-            }
-            Kind::Union => {
-                let (lmin, lmax) = self.get_bounded_length(node_id.left(self));
-                let (rmin, rmax) = self.get_bounded_length(node_id.right(self));
-                (lmin.min(rmin), lmax.max(rmax))
-            }
-            Kind::Inter => {
-                let (lmin, lmax) = self.get_min_max_length(node_id.left(self));
-                let (rmin, rmax) = self.get_min_max_length(node_id.right(self));
-                (lmin.max(rmin), lmax.min(rmax))
-            }
+            Kind::End | Kind::Begin => Nullability::EMPTYSTRING,
+            Kind::Pred => Nullability::NEVER,
+            Kind::Star => Nullability::ALWAYS,
+            Kind::Inter | Kind::Concat => es(node_id.left(self)).and(es(node_id.right(self))),
+            Kind::Union => es(node_id.left(self)).or(es(node_id.right(self))),
+            Kind::Compl => es(node_id.left(self)).not(),
+            Kind::Lookbehind => es(node_id.left(self)),
             Kind::Lookahead => {
-                self.get_min_max_length(node_id.right(self).missing_to_eps())
+                let body_null = es(node_id.left(self));
+                let la_tail = self.get_lookahead_tail(node_id);
+                if la_tail == NodeId::MISSING {
+                    body_null
+                } else {
+                    body_null.and(es(la_tail))
+                }
             }
-            Kind::Ordered => self.get_min_max_length(node_id.left(self)),
-            Kind::Star | Kind::Compl => (0, u32::MAX),
-            Kind::Lookbehind => self.get_min_max_length(node_id.right(self).missing_to_eps()),
+            Kind::Ordered => es(node_id.left(self)),
         }
     }
 
@@ -1123,29 +1189,7 @@ impl RegexBuilder {
     }
 
     fn get_min_length_only(&self, node_id: NodeId) -> u32 {
-        match self.get_kind(node_id) {
-            Kind::End | Kind::Begin => 0,
-            Kind::Pred => 1,
-            Kind::Concat => {
-                self.get_min_length_only(node_id.left(self))
-                    + self.get_min_length_only(node_id.right(self))
-            }
-            Kind::Union => self
-                .get_min_length_only(node_id.left(self))
-                .min(self.get_min_length_only(node_id.right(self))),
-            Kind::Inter => self
-                .get_min_length_only(node_id.left(self))
-                .max(self.get_min_length_only(node_id.right(self))),
-            Kind::Star | Kind::Lookbehind | Kind::Lookahead => 0,
-            Kind::Ordered => self.get_min_length_only(node_id.left(self)),
-            Kind::Compl => {
-                if self.nullability(node_id.left(self)) == Nullability::ALWAYS {
-                    1
-                } else {
-                    0
-                }
-            }
-        }
+        self.lengths[node_id.0 as usize].mml_min
     }
 
     pub fn starts_with_ts(&self, node_id: NodeId) -> bool {
@@ -1761,6 +1805,10 @@ impl RegexBuilder {
         }
 
         self.array.push(inst);
+
+        let nl = self.compute_node_len(node_id);
+        debug_assert!(self.lengths.len() == node_id.0 as usize);
+        self.lengths.push(nl);
 
         if let Some(rw) = self.post_init_simplify(node_id) {
             self.override_as(node_id, rw)
@@ -3836,34 +3884,7 @@ impl RegexBuilder {
     /// it's cheaper to check this once as an edge-case
     /// than to compute a 4th nullability bit for every node
     pub fn nullability_emptystring(&self, node_id: NodeId) -> Nullability {
-        match self.get_kind(node_id) {
-            Kind::End => Nullability::EMPTYSTRING,
-            Kind::Begin => Nullability::EMPTYSTRING,
-            Kind::Pred => Nullability::NEVER,
-            Kind::Star => Nullability::ALWAYS,
-            Kind::Inter | Kind::Concat => {
-                let lnull = self.nullability_emptystring(node_id.left(self));
-                let rnull = self.nullability_emptystring(node_id.right(self));
-                lnull.and(rnull) // left = 010, right = 001, left & right = 000
-            }
-            Kind::Union => {
-                let lnull = self.nullability_emptystring(node_id.left(self));
-                let rnull = self.nullability_emptystring(node_id.right(self));
-                lnull.or(rnull)
-            }
-            Kind::Compl => self.nullability_emptystring(node_id.left(self)).not(),
-            Kind::Lookbehind => self.nullability_emptystring(node_id.left(self)),
-            Kind::Lookahead => {
-                let body_null = self.nullability_emptystring(node_id.left(self));
-                let la_tail = self.get_lookahead_tail(node_id);
-                if la_tail == NodeId::MISSING {
-                    body_null
-                } else {
-                    body_null.and(self.nullability_emptystring(la_tail))
-                }
-            }
-            Kind::Ordered => self.nullability_emptystring(node_id.left(self)),
-        }
+        self.lengths[node_id.0 as usize].es_null
     }
 
     #[inline(always)]

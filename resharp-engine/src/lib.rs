@@ -48,11 +48,12 @@ compile_error!(
 
 pub(crate) mod accel;
 pub(crate) mod bdfa;
-pub(crate) mod engine;
+pub(crate) mod ldfa;
 pub(crate) mod fas;
 pub(crate) mod minterms;
 pub(crate) mod fwd;
 pub(crate) mod prefix;
+pub(crate) mod scan;
 pub(crate) mod stream;
 pub use stream::StreamState;
 
@@ -268,10 +269,10 @@ pub struct Match {
 
 pub(crate) struct RegexInner {
     pub(crate) b: RegexBuilder,
-    pub(crate) fwd: engine::LDFA,
-    pub(crate) fwd_ts: engine::LDFA,
-    pub(crate) rev: Option<engine::LDFA>,
-    pub(crate) rev_ts: engine::LDFA,
+    pub(crate) fwd: ldfa::LDFA,
+    pub(crate) fwd_ts: ldfa::LDFA,
+    pub(crate) rev: Option<ldfa::LDFA>,
+    pub(crate) rev_ts: ldfa::LDFA,
     pub(crate) stream: stream::StreamInit,
     pub(crate) nulls: Vec<usize>,
     pub(crate) matches: Vec<Match>,
@@ -1057,15 +1058,15 @@ impl Regex {
             selected,
             Some(prefix::PrefixKind::AnchoredFwd(_) | prefix::PrefixKind::AnchoredFwdLb(_))
         );
-        let fwd = engine::LDFA::new_fwd(&mut b, fwd_start, max_cap)?;
+        let fwd = ldfa::LDFA::new_fwd(&mut b, fwd_start, max_cap)?;
 
         let ts_fwd_start = {
             let with_ts = b.mk_concat(NodeId::TS, node);
             b.simplify_fwd_initial(with_ts)
         };
-        let mut ts_fwd = engine::LDFA::new_fwd(&mut b, ts_fwd_start, max_cap)?;
+        let mut ts_fwd = ldfa::LDFA::new_fwd(&mut b, ts_fwd_start, max_cap)?;
 
-        let mut rev_ts = engine::LDFA::new_rev(&mut b, ts_rev_start, max_cap)?;
+        let mut rev_ts = ldfa::LDFA::new_rev(&mut b, ts_rev_start, max_cap)?;
         rev_ts.prefix_skip = rev_skip;
         rev_ts.ensure_pruned_skip();
         if b.is_begin_anchored(ts_rev_start) {
@@ -1347,7 +1348,7 @@ fn compute_find_all(
 #[cfg(feature = "convergence_prefix")]
 pub(crate) fn find_strict_convergence_node(
     b: &mut resharp_algebra::RegexBuilder,
-    ts: &mut engine::LDFA,
+    ts: &mut ldfa::LDFA,
     rev_start: resharp_algebra::NodeId,
     max_depth: u32,
 ) -> Option<(resharp_algebra::NodeId, u32)> {
@@ -1365,7 +1366,7 @@ pub(crate) fn find_strict_convergence_node(
         return None;
     }
     let stripped_sid = ts.get_or_register(b, stripped);
-    if stripped_sid <= engine::DFA_DEAD {
+    if stripped_sid <= ldfa::DFA_DEAD {
         return None;
     }
     ts.ensure_capacity(stripped_sid);
@@ -1465,8 +1466,8 @@ pub(crate) fn find_strict_convergence_node(
         let mut next: HashSet<u16> = HashSet::new();
         for &s in &frontier {
             for mt in 0..num_mt {
-                let ns = ts.lazy_transition(b, s, mt).unwrap_or(engine::DFA_DEAD);
-                if ns > engine::DFA_DEAD {
+                let ns = ts.lazy_transition(b, s, mt).unwrap_or(ldfa::DFA_DEAD);
+                if ns > ldfa::DFA_DEAD {
                     next.insert(ns);
                 }
             }
@@ -1573,7 +1574,7 @@ impl Regex {
             )
             .unwrap();
             Self::dump_state(&mut out, b, rev, sid);
-            if sid as u32 <= engine::DFA_DEAD as u32 {
+            if sid as u32 <= ldfa::DFA_DEAD as u32 {
                 break;
             }
         }
@@ -1625,7 +1626,7 @@ impl Regex {
             sid = fwd.lazy_transition(b, sid, mt).unwrap();
             writeln!(out, "pos={} byte={:?} -> s[{}]", i, input[i] as char, sid).unwrap();
             Self::dump_fwd_state(&mut out, b, fwd, sid);
-            if sid as u32 <= engine::DFA_DEAD as u32 {
+            if sid as u32 <= ldfa::DFA_DEAD as u32 {
                 break;
             }
         }
@@ -1636,7 +1637,7 @@ impl Regex {
     fn dump_fwd_state(
         out: &mut String,
         b: &mut resharp_algebra::RegexBuilder,
-        fwd: &engine::LDFA,
+        fwd: &ldfa::LDFA,
         sid: u16,
     ) {
         use std::fmt::Write;
@@ -1677,7 +1678,7 @@ impl Regex {
     fn dump_state(
         out: &mut String,
         b: &mut resharp_algebra::RegexBuilder,
-        rev: &engine::LDFA,
+        rev: &ldfa::LDFA,
         sid: u16,
     ) {
         use std::fmt::Write;
@@ -1844,7 +1845,7 @@ impl Regex {
         
         if self.has_lb && !self.rev_trivial && !self.always_nullable {
             // may be inefficient but.. why would you pass a lookbehind to an anchored method
-            let first = inner.fwd_ts.scan_fwd_first_null_from(&mut inner.b, engine::DFA_INITIAL as u32, 0, input)?;
+            let first = inner.fwd_ts.scan_fwd_first_null_from(&mut inner.b, ldfa::DFA_INITIAL as u32, 0, input)?;
             if first.2 {
                 return Ok(None);
             }

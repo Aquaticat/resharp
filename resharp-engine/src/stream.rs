@@ -1,12 +1,12 @@
 //! All stream/seek methods return shortest matches (left-to-right, earliest end).
 
-use crate::{accel, engine, prefix, Error, Match, Nullability, Regex};
+use crate::{accel, ldfa, prefix, Error, Match, Nullability, Regex};
 
 fn begin_search_start(re: &Regex, input: &[u8]) -> Result<usize, Error> {
     let inner = &mut *re.inner.lock().unwrap();
     let mt = inner.fwd.mt_lookup[input[0] as usize];
     let st0 = inner.fwd.begin_table[mt as usize] as u32;
-    if st0 == inner.fwd.pruned as u32 || st0 <= engine::DFA_DEAD as u32 {
+    if st0 == inner.fwd.pruned as u32 || st0 <= ldfa::DFA_DEAD as u32 {
         return Ok(0);
     }
     let end = input.len();
@@ -31,7 +31,7 @@ fn stream_anchored_fwd<const STOP: bool, F: FnMut(usize, usize)>(
 
     while let Some(candidate) = fwd_prefix.find_fwd(input, search_start) {
         let (body_state, body_pos) = if lb_len > 0 {
-            (engine::DFA_INITIAL as u32, candidate + lb_len)
+            (ldfa::DFA_INITIAL as u32, candidate + lb_len)
         } else {
             let st = inner
                 .fwd
@@ -55,7 +55,7 @@ fn stream_anchored_fwd<const STOP: bool, F: FnMut(usize, usize)>(
             if hit && p < end {
                 let mt = inner.fwd.mt_lookup[input[p] as usize] as u32;
                 let nxt = inner.fwd.lazy_transition(&mut inner.b, st as u16, mt)? as u32;
-                if nxt <= engine::DFA_DEAD as u32 {
+                if nxt <= ldfa::DFA_DEAD as u32 {
                     break None;
                 }
                 state = nxt;
@@ -83,13 +83,13 @@ fn stream_anchored_fwd<const STOP: bool, F: FnMut(usize, usize)>(
 }
 
 fn resolve_emit(
-    fwd: &engine::LDFA,
+    fwd: &ldfa::LDFA,
     state: u32,
     pos: usize,
     end: usize,
     hit_null: bool,
 ) -> Option<usize> {
-    if state <= engine::DFA_DEAD as u32 {
+    if state <= ldfa::DFA_DEAD as u32 {
         return None;
     }
     let mask = if pos == end {
@@ -99,11 +99,11 @@ fn resolve_emit(
     } else {
         return None;
     };
-    if !engine::has_any_null(&fwd.effects_id, &fwd.effects, state, mask) {
+    if !ldfa::has_any_null(&fwd.effects_id, &fwd.effects, state, mask) {
         return None;
     }
     let mut match_end = 0usize;
-    engine::collect_max_fwd(
+    ldfa::collect_max_fwd(
         &fwd.effects_id,
         &fwd.effects,
         state,
@@ -144,7 +144,7 @@ impl Regex {
             let rev = inner.b.strip_lb(rev).map_err(Error::Algebra)?;
             let rev = inner.b.normalize_rev(rev, 0).map_err(Error::Algebra)?;
             let max_cap = inner.fwd.max_capacity;
-            inner.rev = Some(engine::LDFA::new_rev(&mut inner.b, rev, max_cap)?);
+            inner.rev = Some(ldfa::LDFA::new_rev(&mut inner.b, rev, max_cap)?);
             let _ = self.stream_cache.rev_inited.set(());
         }
         Ok(())
@@ -229,11 +229,11 @@ fn try_emit_step<const REV: bool, F: FnMut(usize, usize)>(
     emit: &mut F,
 ) -> Result<bool, Error> {
     let dfa = &inner.fwd_ts;
-    if !engine::has_any_null(&dfa.effects_id, &dfa.effects, state, mask) {
+    if !ldfa::has_any_null(&dfa.effects_id, &dfa.effects, state, mask) {
         return Ok(false);
     }
     let mut match_end = 0usize;
-    engine::collect_max_fwd(
+    ldfa::collect_max_fwd(
         &dfa.effects_id,
         &dfa.effects,
         state,
@@ -274,7 +274,7 @@ fn stream_general<const REV: bool, const STOP: bool, F: FnMut(usize, usize)>(
             fwd_prefix,
             input,
             1,
-            engine::DFA_INITIAL as u32,
+            ldfa::DFA_INITIAL as u32,
             &mut last_match_end,
             &mut emit,
         )?;
@@ -302,7 +302,7 @@ fn stream_general<const REV: bool, const STOP: bool, F: FnMut(usize, usize)>(
         return Ok(());
     }
     let state = if emitted {
-        engine::DFA_INITIAL as u32
+        ldfa::DFA_INITIAL as u32
     } else {
         first
     };
@@ -335,7 +335,7 @@ fn stream_feed_loop<
     let end = input.len();
     let mut state = init_state;
     while pos < end {
-        if PREFIX && state == engine::DFA_INITIAL as u32 {
+        if PREFIX && state == ldfa::DFA_INITIAL as u32 {
             if let Some(fp) = fwd_prefix {
                 match fp.find_fwd(input, pos) {
                     Some(cand) => pos = cand,
@@ -366,8 +366,8 @@ fn stream_feed_loop<
             .fwd_ts
             .lazy_transition(&mut inner.b, state as u16, mt)? as u32;
         pos += 1;
-        if next == engine::DFA_DEAD as u32 {
-            state = engine::DFA_INITIAL as u32;
+        if next == ldfa::DFA_DEAD as u32 {
+            state = ldfa::DFA_INITIAL as u32;
             continue;
         }
         let mask = if pos < end {
@@ -377,10 +377,10 @@ fn stream_feed_loop<
         };
         let emitted = try_emit_step::<REV, _>(inner, input, pos, mask, next, last_match_end, emit)?;
         if STOP && emitted {
-            return Ok(engine::DFA_INITIAL as u32);
+            return Ok(ldfa::DFA_INITIAL as u32);
         }
         state = if emitted {
-            engine::DFA_INITIAL as u32
+            ldfa::DFA_INITIAL as u32
         } else {
             next
         };
@@ -447,11 +447,11 @@ pub struct StreamState(pub(crate) u32, pub(crate) usize);
 impl StreamState {
     /// Initial state for the first chunk.
     pub fn new() -> Self {
-        Self(engine::DFA_INITIAL as u32, 0)
+        Self(ldfa::DFA_INITIAL as u32, 0)
     }
     /// Initial state starting at absolute byte offset `pos` (for resuming mid-stream).
     pub fn at(pos: usize) -> Self {
-        Self(engine::DFA_INITIAL as u32, pos)
+        Self(ldfa::DFA_INITIAL as u32, pos)
     }
     /// Absolute byte offset consumed so far.
     pub fn pos(&self) -> usize {
@@ -556,7 +556,7 @@ impl Regex {
                 .fwd_ts
                 .lazy_transition(&mut inner.b, state as u16, mt)? as u32;
             pos += 1;
-            if next == engine::DFA_DEAD as u32 {
+            if next == ldfa::DFA_DEAD as u32 {
                 state = fwd_initial_state;
                 transitioned = false;
                 continue;
@@ -567,9 +567,9 @@ impl Regex {
                 break;
             }
             let dfa = &inner.fwd_ts;
-            if engine::has_any_null(&dfa.effects_id, &dfa.effects, state, Nullability::CENTER) {
+            if ldfa::has_any_null(&dfa.effects_id, &dfa.effects, state, Nullability::CENTER) {
                 let mut match_end = 0usize;
-                engine::collect_max_fwd(
+                ldfa::collect_max_fwd(
                     &dfa.effects_id,
                     &dfa.effects,
                     state,
@@ -583,9 +583,9 @@ impl Regex {
         }
         if transitioned && pos == end {
             let dfa = &inner.fwd_ts;
-            if engine::has_any_null(&dfa.effects_id, &dfa.effects, state, Nullability::END) {
+            if ldfa::has_any_null(&dfa.effects_id, &dfa.effects, state, Nullability::END) {
                 let mut match_end = 0usize;
-                engine::collect_max_fwd(
+                ldfa::collect_max_fwd(
                     &dfa.effects_id,
                     &dfa.effects,
                     state,
@@ -634,7 +634,7 @@ impl Regex {
             let next = inner
                 .rev_ts
                 .lazy_transition(&mut inner.b, state as u16, mt)? as u32;
-            if next == engine::DFA_DEAD as u32 {
+            if next == ldfa::DFA_DEAD as u32 {
                 state = rev_initial_state;
                 transitioned = false;
                 continue;
@@ -645,9 +645,9 @@ impl Regex {
                 break;
             }
             let dfa = &inner.rev_ts;
-            if engine::has_any_null(&dfa.effects_id, &dfa.effects, state, Nullability::CENTER) {
+            if ldfa::has_any_null(&dfa.effects_id, &dfa.effects, state, Nullability::CENTER) {
                 let mut match_start = usize::MAX;
-                engine::collect_max_rev(
+                ldfa::collect_max_rev(
                     &dfa.effects_id,
                     &dfa.effects,
                     state,
@@ -665,9 +665,9 @@ impl Regex {
         }
         if transitioned && pos == 0 {
             let dfa = &inner.rev_ts;
-            if engine::has_any_null(&dfa.effects_id, &dfa.effects, state, Nullability::END) {
+            if ldfa::has_any_null(&dfa.effects_id, &dfa.effects, state, Nullability::END) {
                 let mut match_start = usize::MAX;
-                engine::collect_max_rev(
+                ldfa::collect_max_rev(
                     &dfa.effects_id,
                     &dfa.effects,
                     state,
