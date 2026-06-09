@@ -324,6 +324,8 @@ pub enum FindAll {
     EmptyLang,
     /// `\A`-anchored; single forward scan from byte 0.
     Anchored,
+    /// `\z`-anchored; single reverse scan from the string end.
+    EndAnchored,
     /// O(N·S) bulk scan for untrusted patterns.
     Hardened,
     /// SIMD forward-prefix anchored scan.
@@ -1017,7 +1019,9 @@ impl Regex {
         let lb_stripped = fwd_start != body_after_begin;
         let fwd_begin_anchored = b.is_begin_anchored(node) && !lb_stripped;
         let rev_trivial = b.nullability(ts_rev_start) == Nullability::ALWAYS;
-        let rev_end_anchored = !fwd_end_nullable && b.is_begin_anchored(ts_rev_start);
+        let has_look = b.contains_look(node);
+        let rev_node = b.reverse(node)?;
+        let rev_end_anchored = b.is_begin_anchored(rev_node) && !has_look && !fwd_end_nullable;
         let fixed_length = b.get_fixed_length(node);
         let (min_len, max_len) = b.get_min_max_length(node);
         let max_length = if max_len != u32::MAX {
@@ -1025,7 +1029,6 @@ impl Regex {
         } else {
             None
         };
-        let has_look = b.contains_look(node);
         let max_cap = opts.max_dfa_capacity.min(u16::MAX as usize);
         let mut opts = opts;
         let has_anchors_pre = b.contains_anchors(node);
@@ -1168,6 +1171,7 @@ impl Regex {
             find_all: compute_find_all(
                 is_empty_lang,
                 fwd_begin_anchored,
+                rev_end_anchored,
                 hardened,
                 has_bounded,
                 &selected,
@@ -1240,6 +1244,21 @@ impl Regex {
 
     #[cfg(feature = "diag")]
     #[allow(missing_docs)]
+    pub fn find_all_kind_name(&self) -> &'static str {
+        match self.find_all {
+            FindAll::EmptyLang => "EmptyLang",
+            FindAll::Anchored => "Anchored",
+            FindAll::EndAnchored => "EndAnchored",
+            FindAll::Hardened => "Hardened",
+            FindAll::Dfa => "Dfa",
+            FindAll::Bounded => "Bounded",
+            FindAll::FwdPrefix => "FwdPrefix",
+            FindAll::FwdLbPrefix => "FwdLbPrefix",
+        }
+    }
+
+    #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
     pub fn prefix_kind_name(&self) -> Option<&'static str> {
         match &self.prefix {
             None => None,
@@ -1294,6 +1313,7 @@ impl Regex {
         match self.find_all {
             FindAll::EmptyLang => Ok(vec![]),
             FindAll::Anchored => Ok(self.find_anchored(input)?.into_iter().collect()),
+            FindAll::EndAnchored => Ok(self.find_end_anchored(input)?.into_iter().collect()),
             FindAll::Hardened | FindAll::Dfa => self.find_all_dfa(input),
             FindAll::Bounded => {
                 if self.bounded_safe_find_all {
@@ -1319,6 +1339,7 @@ impl Regex {
 fn compute_find_all(
     is_empty_lang: bool,
     fwd_begin_anchored: bool,
+    rev_end_anchored: bool,
     hardened: bool,
     has_bounded: bool,
     prefix: &Option<prefix::PrefixKind>,
@@ -1331,6 +1352,9 @@ fn compute_find_all(
     }
     if hardened {
         return FindAll::Hardened;
+    }
+    if rev_end_anchored {
+        return FindAll::EndAnchored;
     }
     match prefix {
         Some(prefix::PrefixKind::AnchoredFwd(_)) => FindAll::FwdPrefix,
@@ -1853,6 +1877,18 @@ impl Regex {
         Ok(inner.fwd.scan_fwd_slow(&mut inner.b, 0, input)?.map(|end| Match { start: 0, end }))
     }
 
+    /// longest match anchored at the string end (`\z`).
+    ///
+    /// returns `None` if the pattern does not match ending at the string end.
+    pub(crate) fn find_end_anchored(&self, input: &[u8]) -> Result<Option<Match>, Error> {
+        let len = input.len();
+        let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        Ok(inner
+            .rev_ts
+            .scan_rev_from(&mut inner.b, len, 0, input)?
+            .map(|start| Match { start, end: len }))
+    }
+
     pub(crate) fn is_match_fwd_ts(&self, input: &[u8]) -> Result<bool, Error> {
         let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
         Ok(inner.fwd_ts.scan_fwd_slow(&mut inner.b, 0, input)?.is_some())
@@ -1872,6 +1908,7 @@ impl Regex {
         match self.find_all {
             FindAll::EmptyLang => Ok(false),
             FindAll::Anchored => Ok(self.find_anchored(input)?.is_some()),
+            FindAll::EndAnchored => Ok(self.find_end_anchored(input)?.is_some()),
             FindAll::Hardened | FindAll::Dfa => Ok(!self.find_all_dfa(input)?.is_empty()),
             FindAll::Bounded |
             FindAll::FwdPrefix | FindAll::FwdLbPrefix => self.is_match_fwd_ts(input),

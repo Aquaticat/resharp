@@ -2750,3 +2750,48 @@ fn nested_unbounded_lookaround_anchor_limit() {
 //     }
 // }
 
+#[test]
+fn begin_anchored_lookahead_short_circuits() {
+    let pats = ["(?=^#{1,4}\\s)", "(?=^##\\s)", "(?=^---\\s+\\S)", "(?=^@@ )", "(?=^##? )"];
+    let hay = "lorem ipsum dolor sit amet ".repeat(4000).into_bytes();
+    for pat in pats {
+        let re = Regex::with_options(pat, RegexOptions::default().multiline(false)).unwrap();
+        assert!(re.is_fwd_begin_anchored(), "pat={pat} not begin-anchored");
+        assert!(re.find_all(&hay).unwrap().is_empty(), "pat={pat} false match");
+    }
+    let re = Regex::with_options("(?=^##\\s)", RegexOptions::default().multiline(false)).unwrap();
+    assert_eq!(
+        re.find_all(b"## hi\nmore").unwrap(),
+        vec![resharp::Match { start: 0, end: 0 }]
+    );
+    assert!(re.find_all(b"x## hi").unwrap().is_empty());
+}
+
+#[test]
+fn end_anchored_short_circuits() {
+    let pats = ["(c|a)\\z", "(e|en|es)\\z", "\\w+\\z", "[0-9]+\\z", "abc\\z"];
+    let hay = "lorem ipsum dolor sit amet ".repeat(4000).into_bytes();
+    for pat in pats {
+        let re = Regex::with_options(pat, RegexOptions::default().multiline(false)).unwrap();
+        assert!(
+            re.find_all(&hay).unwrap().is_empty(),
+            "pat={pat} false match on non-matching haystack"
+        );
+    }
+    let re = Regex::with_options("(e|en|es)\\z", RegexOptions::default().multiline(false)).unwrap();
+    assert_eq!(
+        re.find_all(b"notes").unwrap(),
+        vec![resharp::Match { start: 3, end: 5 }]
+    );
+}
+
+#[test]
+fn end_anchored_alternation_hoist() {
+    for pat in ["es\\z|s\\z", ".com\\z|.net\\z|.org\\z", "a\\z|b\\z"] {
+        let re = Regex::with_options(pat, RegexOptions::default().multiline(false)).unwrap();
+        assert_eq!(re.find_all_kind_name(), "EndAnchored", "pattern {pat}");
+    }
+    let re = Regex::with_options("es\\z|s\\z", RegexOptions::default().multiline(false)).unwrap();
+    assert_eq!(re.find_all(b"notes").unwrap(), vec![resharp::Match { start: 3, end: 5 }]);
+}
+

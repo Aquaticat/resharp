@@ -1230,9 +1230,26 @@ impl RegexBuilder {
     }
 
     pub fn is_begin_anchored(&self, node_id: NodeId) -> bool {
-        node_id == NodeId::BEGIN
-            || (self.get_kind(node_id) == Kind::Concat && node_id.left(self) == NodeId::BEGIN)
+        if node_id == NodeId::BEGIN {
+            return true;
+        }
+        match self.get_kind(node_id) {
+            Kind::Concat => self.is_begin_anchored(node_id.left(self)),
+            Kind::Union => {
+                self.is_begin_anchored(node_id.left(self))
+                    && self.is_begin_anchored(node_id.right(self))
+            }
+            Kind::Lookahead => {
+                if self.is_begin_anchored(self.get_lookahead_inner(node_id)) {
+                    return true;
+                }
+                let tail = self.get_lookahead_tail(node_id);
+                !tail.is_missing() && self.is_begin_anchored(tail)
+            }
+            _ => false,
+        }
     }
+
 
     pub fn ends_with_ts_any_branch(&self, node_id: NodeId) -> bool {
         if node_id == NodeId::TS {
