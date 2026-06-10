@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use resharp_algebra::nulls::{EID_BEGIN0, EID_CENTER0, EID_END0, EID_NONE, NullState, Nullability};
+use resharp_algebra::nulls::{
+    push_null_desc, EID_BEGIN0, EID_CENTER0, EID_END0, EID_NONE, NullState, Nullability,
+};
 use resharp_algebra::{NodeId, RegexBuilder};
 
 use crate::accel::MintermSearchValue;
@@ -26,7 +28,7 @@ fn collect_rev_center_simple(
     unsafe {
         let v = &*effects.add(eid as usize); // bounds: see `register_state`
         for n in v {
-            nulls.push(pos + n.rel as usize);
+            push_null_desc(nulls, pos + n.rel as usize);
         }
     }
 }
@@ -44,7 +46,7 @@ pub(crate) fn collect_rev_complex(
         let effects_vec = &*effects.add(eid as usize); // bounds: see `register_state`
         for n in effects_vec {
             if n.mask.has(mask) {
-                nulls.push(pos + n.rel as usize);
+                push_null_desc(nulls, pos + n.rel as usize);
             }
         }
     }

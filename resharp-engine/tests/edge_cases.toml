@@ -347,3 +347,33 @@ name = "compl_dollar_star_non_multiline"
 pattern = '(?-m)~(_*$)'
 input = "ab"
 matches = [[0, 1], [1, 1]]
+
+[[test]]
+name = "dot_all_inline_flag"
+pattern = '(?s)a.b'
+input = "a\nb"
+matches = [[0, 3]]
+
+[[test]]
+name = "dot_all_scoped_group_match"
+pattern = '(?s:a.b).c'
+input = "a\nbxc"
+matches = [[0, 5]]
+
+[[test]]
+name = "dot_all_scoped_group_no_match"
+pattern = '(?s:a.b).c'
+input = "a\nb\nc"
+matches = []
+
+[[test]]
+name = "bug2_rev_fwd_dot_W_b"
+pattern = '.\W*b+'
+input = "ba"
+matches = []
+
+[[test]]
+name = "bug2_rev_fwd_S_b"
+pattern = '\S+b'
+input = "b_"
+matches = []

@@ -273,3 +273,57 @@ name = "wb_nonword_class_foo_bang"
 pattern = '\b\W'
 input = "foo /*!"
 matches = [[3, 4]]
+
+[[test]]
+name = "not_wb_thousands_sep_7digits"
+pattern = '\B(?!\.\d*)(?=(\d{3})+(?!\d))'
+input = "1234567"
+matches = [[1, 1], [4, 4]]
+
+[[test]]
+name = "not_wb_thousands_sep_decimal"
+pattern = '\B(?!\.\d*)(?=(\d{3})+(?!\d))'
+input = "1234.5"
+matches = [[1, 1]]
+
+[[test]]
+name = "not_wb_before_upper_run"
+pattern = '\B(?=[A-Z]{2,})'
+input = "fooBAR baz QUX"
+matches = [[3, 3], [4, 4], [12, 12]]
+
+[[test]]
+name = "wb_after_mixed_class_category_no_match"
+pattern = 'cat\b\w*'
+input = "category"
+matches = []
+
+[[test]]
+name = "wb_script_tag_no_match"
+pattern = '<script\b[^<]*'
+input = "<scripts!</script>)<"
+matches = []
+
+[[test]]
+name = "wb_cat_word_boundary_no_match"
+pattern = 'cat\b'
+input = "category"
+matches = []
+
+[[test]]
+name = "wb_cat_word_boundary_match"
+pattern = 'cat\b'
+input = "cat dog"
+matches = [[0, 3]]
+
+[[test]]
+name = "wb_ci_cat_word_no_match"
+pattern = '(?i)cat\b\w*'
+input = "category"
+matches = []
+
+[[test]]
+name = "wb_ci_script_tag_no_match"
+pattern = '(?i)<script\b[^<]*'
+input = "<scripts!</script>)<"
+matches = []

@@ -144,7 +144,7 @@ fn fwd_lb_prefix_impl<const IS_MATCH: bool>(
                     return Ok(true);
                 }
             }
-            search_start = max_end;
+            search_start = if max_end > body_start { max_end - lb_len } else { body_start };
         } else {
             search_start = body_start;
         }

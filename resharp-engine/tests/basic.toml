@@ -465,3 +465,15 @@ pattern = '(?i:a(?-i:b)c)'
 input = "AbC ABC abc aBc"
 matches = [[0, 3], [8, 11]]
 
+[[test]]
+name = "literal_no_match_across_newline"
+pattern = "ccc"
+input = "cc\nc"
+matches = []
+
+[[test]]
+name = "literal_leftmost_non_overlapping_aaaa"
+pattern = "aaa"
+input = "aaaa"
+matches = [[0, 3]]
+

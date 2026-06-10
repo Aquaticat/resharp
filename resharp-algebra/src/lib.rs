@@ -427,7 +427,7 @@ impl NodeId {
         TSetId(b.get_extra(self))
     }
     #[inline]
-    fn is_star(self, b: &RegexBuilder) -> bool {
+    pub fn is_star(self, b: &RegexBuilder) -> bool {
         if NodeId::EPS == self {
             return false;
         }
@@ -482,7 +482,7 @@ impl NodeId {
     }
 
     #[inline]
-    fn is_concat(self, b: &RegexBuilder) -> bool {
+    pub fn is_concat(self, b: &RegexBuilder) -> bool {
         b.get_kind(self) == Kind::Concat
     }
 
@@ -3328,8 +3328,12 @@ impl RegexBuilder {
         {
             let (hl, hr) = (head.left(self), head.right(self));
             
-            if (hl.is_eps() && hr.is_lookahead(self))
-                || (hr.is_eps() && hl.is_lookahead(self))
+            if (hl.is_eps()
+                && hr.is_lookahead(self)
+                && self.get_lookahead_tail(hr).is_missing())
+                || (hr.is_eps()
+                    && hl.is_lookahead(self)
+                    && self.get_lookahead_tail(hl).is_missing())
             {
                 return self.init_as(key, tail);
             }

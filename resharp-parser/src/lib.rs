@@ -1408,18 +1408,20 @@ impl<'s> ResharpParser<'s> {
             Ast::Dot(_) | Ast::Top(_) => Unknown,
             Ast::Group(g) => Self::word_char_kind(&g.ast, left),
             Ast::Concat(c) if !c.asts.is_empty() => {
-                let edge = if left { c.asts.len() - 1 } else { 0 };
+                let dir: isize = if left { -1 } else { 1 };
+                let edge = match Self::concat_edge_index(&c.asts, left) {
+                    Some(e) => e,
+                    None => return Unknown,
+                };
                 let kind = Self::word_char_kind(&c.asts[edge], left);
                 match kind {
                     MaybeWord => {
-                        let dir: isize = if left { -1 } else { 1 };
                         match Self::concat_neighbor_kind(&c.asts, edge, dir) {
                             Word => Word,
                             _ => MaybeWord,
                         }
                     }
                     MaybeNonWord => {
-                        let dir: isize = if left { -1 } else { 1 };
                         match Self::concat_neighbor_kind(&c.asts, edge, dir) {
                             NonWord => NonWord,
                             _ => MaybeNonWord,
@@ -1485,7 +1487,8 @@ impl<'s> ResharpParser<'s> {
             | Ast::Top(_) => Some(ast),
             Ast::Group(g) => Self::edge_class_ast(&g.ast, left),
             Ast::Concat(c) if !c.asts.is_empty() => {
-                Self::edge_class_ast(&c.asts[if left { c.asts.len() - 1 } else { 0 }], left)
+                Self::concat_edge_index(&c.asts, left)
+                    .and_then(|e| Self::edge_class_ast(&c.asts[e], left))
             }
             Ast::Repetition(r) => {
                 let nullable = matches!(
@@ -1579,6 +1582,7 @@ impl<'s> ResharpParser<'s> {
             };
         } else {
             let neighbor_node = self.ast_to_node_id(&asts[neighbor_idx], translator, tb)?;
+            let neighbor_node = Self::strip_trailing_lookahead(tb, neighbor_node);
             let mut neighbor_node = tb
                 .try_elim_lookarounds(neighbor_node)
                 .ok_or_else(|| self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex))?;
@@ -1601,6 +1605,41 @@ impl<'s> ResharpParser<'s> {
             Ok(NonWord)
         } else {
             Ok(Unknown)
+        }
+    }
+
+    fn strip_trailing_lookahead(tb: &mut TB<'s>, node: NodeId) -> NodeId {
+        match tb.get_kind(node) {
+            Kind::Lookahead if tb.get_min_max_length(node).1 == 0 => NodeId::EPS,
+            Kind::Concat => {
+                let l = node.left(tb);
+                let r = node.right(tb);
+                let stripped_r = Self::strip_trailing_lookahead(tb, r);
+                if stripped_r == NodeId::EPS {
+                    Self::strip_trailing_lookahead(tb, l)
+                } else if stripped_r == r {
+                    node
+                } else {
+                    tb.mk_concat(l, stripped_r)
+                }
+            }
+            _ => node,
+        }
+    }
+
+    fn concat_edge_index(asts: &[Ast], left: bool) -> Option<usize> {
+        let dir: isize = if left { -1 } else { 1 };
+        let mut e = if left { asts.len() as isize - 1 } else { 0 };
+        while e >= 0
+            && (e as usize) < asts.len()
+            && Self::is_transparent_for_dir(&asts[e as usize], dir)
+        {
+            e += dir;
+        }
+        if e < 0 || e as usize >= asts.len() {
+            None
+        } else {
+            Some(e as usize)
         }
     }
 

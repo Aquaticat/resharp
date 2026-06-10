@@ -110,3 +110,15 @@ name = "neg_la_dot_star_node_modules"
 pattern = 'node_modules|^((?!\.(test|mock)\.).)*$'
 expect_error = true
 reason = "union branch with lookahead under star"
+
+[[test]]
+name = "rev_collect_candidate_without_fwd_end"
+pattern = '((?<!b)(?=b)|-)b(?!b)'
+expect_error = true
+reason = "unsupported: rev-collect candidate with no forward end"
+
+[[test]]
+name = "lookbehind_after_consuming"
+pattern = '[\s\S]+(?<=\S)\z'
+expect_error = true
+reason = "lookbehind after consuming sequence before end anchor"

@@ -1,6 +1,49 @@
 mod common;
 
 #[test]
+fn consuming_alternation_fixed_lookbehind() {
+    let cases: &[(&str, &str, &[&str])] = &[
+        (r".|(?<=ab)y", "Xaby", &["X", "a", "b", "y"]),
+        (r".|(?<=ab)y", "XXXXaby", &["X", "X", "X", "X", "a", "b", "y"]),
+        (r"x|(?<=ab)y", "abxaby", &["x", "y"]),
+        (r"x|(?<=\.)y", ".axy", &["x"]),
+    ];
+    for &(p, inp, want) in cases {
+        let re = Regex::new(p).unwrap();
+        let got: Vec<String> = re
+            .find_all(inp.as_bytes())
+            .unwrap()
+            .iter()
+            .map(|m| String::from_utf8_lossy(&inp.as_bytes()[m.start..m.end]).into_owned())
+            .collect();
+        assert_eq!(got, want, "{p} on {inp}");
+    }
+}
+
+#[test]
+fn consuming_alternation_variable_lookbehind_fails_loud() {
+    for p in [
+        r"x|(?<=a[^\n\r]*)y",
+        r"a|(?<=a[^\n\r]*)b",
+        r"(?<!a)b|b(?!a)",
+        r"[^\d.]|((?<=\..*)\.)",
+    ] {
+        assert!(Regex::new(p).is_err(), "expected unsupported (variable lb): {p}");
+    }
+}
+
+#[test]
+fn length_one_lookbehind_alternation_supported() {
+    let re = Regex::new(r"x|(?<=\.)y").unwrap();
+    assert_eq!(
+        re.find_all(b".axy").unwrap(),
+        vec![resharp::Match { start: 2, end: 3 }]
+    );
+    let re = Regex::new(r"\ba{0}\b").unwrap();
+    assert_eq!(re.is_match(b"").unwrap(), false);
+}
+
+#[test]
 fn bounded_repeat_lookahead_no_compile_blowup() {
     let pat = r"(?:#)([A-Za-z0-9_](?:(?:[A-Za-z0-9_]|(?:\.(?!\.))){0,28}(?:[A-Za-z0-9_]))?)";
     let t = std::time::Instant::now();
@@ -588,23 +631,6 @@ fn opts_dot_matches_new_line() {
 }
 
 #[test]
-fn opts_dot_all_inline_flag() {
-    let re = Regex::new("(?s)a.b").unwrap();
-    let m = re.find_all(b"a\nb").unwrap();
-    assert_eq!(m.len(), 1);
-}
-
-#[test]
-fn opts_dot_all_scoped_group() {
-    let re = Regex::new("(?s:a.b).c").unwrap();
-    let m = re.find_all(b"a\nbxc").unwrap();
-    assert_eq!(m.len(), 1);
-
-    let m2 = re.find_all(b"a\nb\nc").unwrap();
-    assert_eq!(m2.len(), 0);
-}
-
-#[test]
 fn opts_ignore_whitespace() {
     let re = Regex::with_options(
         r"hello \ world",
@@ -1071,6 +1097,25 @@ fn run_file_internal(filename: &str) {
 }
 
 #[test]
+fn opt_quantified_multichar_lookahead_fails_loud() {
+    assert!(Regex::new(r"(?:(?!bc)[^\n\r])+").is_err());
+    assert!(Regex::new(r"((?:(?!bc)[^\n\r])+)?x").is_err());
+    assert!(Regex::new(r"<%((?:(?!%>).)+)?%>").is_err());
+
+    let ok = Regex::new(r"(?:(?!b)[^\n\r])+").unwrap();
+    assert_eq!(ok.find_all(b"aab").unwrap(), vec![resharp::Match { start: 0, end: 2 }]);
+}
+
+#[test]
+fn word_boundary_after_grouped_trailing_lookahead() {
+    let exp = vec![resharp::Match { start: 0, end: 1 }];
+    for p in [r"(a(?= ))\b", r"(?:a(?= ))\b", r"a(?= )\b"] {
+        let re = Regex::new(p).unwrap();
+        assert_eq!(re.find_all(b"a b").unwrap(), exp, "pattern {p}");
+    }
+}
+
+#[test]
 fn internal() {
     run_file_internal("internal.toml");
 }
@@ -1122,16 +1167,6 @@ fn run_file_exotic(filename: &str) {
 }
 
 #[test]
-fn rev_collect_candidate_without_fwd_end_minimal() {
-    assert!(Regex::new(r"((?<!b)(?=b)|-)b(?!b)").is_err());
-}
-
-#[test]
-fn lookbehind_after_consuming_rejects() {
-    assert!(Regex::new(r"[\s\S]+(?<=\S)\z").is_err());
-}
-
-#[test]
 fn rust_numeric_literal_suffix_limited_rejects_nonleading_lookbehind() {
     let opts = RegexOptions::default().unicode(resharp::UnicodeMode::Javascript);
     let pattern =
@@ -1148,32 +1183,6 @@ fn exotic_toml() {
 fn alt_embedded_line_anchor_compiles_ok() {
     assert!(Regex::new(r"^a|^b").is_ok());
     assert!(Regex::new(r"^(ab)").is_ok());
-}
-
-#[test]
-fn not_word_boundary_thousands_sep() {
-    // classic "insert thousands separator" zero-width pattern.
-    // matches positions between digits where a comma would go.
-    let re = Regex::new(r"\B(?!\.\d*)(?=(\d{3})+(?!\d))").unwrap();
-    let input = b"1234567";
-    let ms = re.find_all(input).unwrap();
-    let starts: Vec<usize> = ms.iter().map(|m| m.start).collect();
-    assert_eq!(starts, vec![1, 4]);
-
-    let re2 = Regex::new(r"\B(?!\.\d*)(?=(\d{3})+(?!\d))").unwrap();
-    let ms2 = re2.find_all(b"1234.5").unwrap();
-    let starts2: Vec<usize> = ms2.iter().map(|m| m.start).collect();
-    assert_eq!(starts2, vec![1]);
-}
-
-#[test]
-fn not_word_boundary_before_upper_run() {
-    let re = Regex::new(r"\B(?=[A-Z]{2,})").unwrap();
-    let ms = re.find_all(b"fooBAR baz QUX").unwrap();
-    let starts: Vec<usize> = ms.iter().map(|m| m.start).collect();
-    // matches at every position where both sides are word chars and 2+ uppercase
-    // letters follow: "fooBAR" -> 3 (o|BA), 4 (B|AR); "QUX" -> 12 (Q|UX).
-    assert_eq!(starts, vec![3, 4, 12]);
 }
 
 #[test]
@@ -1290,19 +1299,6 @@ fn assets_path_js_unicode_uses_rev_literal() {
         let ms = re.find_all(hay.as_bytes()).unwrap();
         assert_eq!(ms.len(), 100, "mode {:?}", mode);
     }
-}
-
-#[test]
-fn lookahead_alternation_with_end_of_line() {
-    let re = Regex::new(r"x(?=a|$)").unwrap();
-    let input = b"xa xb x\nxc x";
-    let positions: Vec<usize> = re
-        .find_all(input)
-        .unwrap()
-        .iter()
-        .map(|m| m.start)
-        .collect();
-    assert_eq!(positions, vec![0, 6, 11]);
 }
 
 #[test]
@@ -1839,35 +1835,6 @@ fn anchored_rev_intersection_complement_missed_by_find_all() {
 }
 
 #[test]
-fn word_boundary_between_word_chars_should_not_match() {
-    use resharp::Regex;
-    let cases: &[(&str, &[u8], &[(usize, usize)])] = &[
-        (r"cat\b\w*", b"category", &[]),
-        (r"<script\b[^<]*", b"<scripts!</script>)<", &[]),
-        (r"cat\b", b"category", &[]),
-        (r"cat\b", b"cat dog", &[(0, 3)]),
-        (r"(?i)cat\b\w*", b"category", &[]),
-        (r"(?i)<script\b[^<]*", b"<scripts!</script>)<", &[]),
-    ];
-    for (pat, hay, expected) in cases {
-        let r = Regex::new(pat).unwrap();
-        let all = r.find_all(hay).unwrap();
-        let spans: Vec<_> = all.iter().map(|m| (m.start, m.end)).collect();
-        eprintln!(
-            "pat={pat} hay={:?} -> {:?}",
-            std::str::from_utf8(hay).unwrap(),
-            spans
-        );
-        assert_eq!(
-            &spans[..],
-            *expected,
-            "pat={pat} hay={:?}",
-            std::str::from_utf8(hay).unwrap()
-        );
-    }
-}
-
-#[test]
 fn js_numeric_literals() {
     let bin = resharp::Regex::new(r"0b[01]+(?:\_[01]+)*\b").unwrap();
     let oct = resharp::Regex::new(r"0o[0-7]+(?:\_[0-7]+)*\b").unwrap();
@@ -2015,18 +1982,6 @@ fn suffix_anchored_is_match() {
 }
 
 #[test]
-fn lookaround_commute() {
-    let re = Regex::new(r"(?=b)(?<=a)").unwrap();
-    let m: Vec<[usize; 2]> = re
-        .find_all(b"ab")
-        .unwrap()
-        .iter()
-        .map(|m| [m.start, m.end])
-        .collect();
-    assert_eq!(m, vec![[1, 1]]);
-}
-
-#[test]
 fn grouped_boundary_contradiction() {
     match Regex::new(r"(\b)(\B)") {
         Ok(re) => assert!(re.find_all(b"ab").unwrap().is_empty()),
@@ -2082,26 +2037,6 @@ fn long_dot_union_does_not_match_short_haystack() {
     )
     .unwrap();
     assert!(!regex.is_match(haystack.as_bytes()).unwrap());
-}
-
-#[test]
-fn literal_does_not_match_across_newline() {
-    let regex = Regex::new("ccc").unwrap();
-    assert!(!regex.is_match(b"cc\nc").unwrap());
-}
-
-#[test]
-fn literal_aaa_in_aaaa_leftmost_non_overlapping() {
-    let pattern = "aaa";
-    let haystack = "aaaa";
-    let regex = Regex::new(pattern).unwrap();
-    let matches: Vec<[usize; 2]> = regex
-        .find_all(haystack.as_bytes())
-        .unwrap()
-        .iter()
-        .map(|m| [m.start, m.end])
-        .collect();
-    assert_eq!(matches, vec![[0, 3]]);
 }
 
 // #[test]
@@ -2186,26 +2121,6 @@ fn multichar_negative_lookbehind_matches_reference() {
             }
         }
         assert_eq!(ours, reference, "{p:?} on {s:?}");
-    }
-}
-
-#[test]
-fn lookahead_nullable_star_tail_single_char() {
-    let cases: &[(&str, &[u8], &[[usize; 2]])] = &[
-        (r"(?=a)_*a", b"a", &[[0, 1]]),
-        (r"(?=a)_*a", b"aa", &[[0, 2]]),
-        (r"(?=a)__*a", b"a", &[]),
-        (r"(?=\S)[\s\S]*\S", b" x", &[[1, 2]]),
-    ];
-    for (pat, hay, expected) in cases {
-        let re = Regex::new(pat).unwrap();
-        let got: Vec<[usize; 2]> = re
-            .find_all(hay)
-            .unwrap()
-            .iter()
-            .map(|m| [m.start, m.end])
-            .collect();
-        assert_eq!(&got[..], *expected, "pat={pat:?} hay={hay:?}");
     }
 }
 
@@ -2306,17 +2221,6 @@ fn bug3_is_match_vs_find_all_lookbehind() {
     let im = re.is_match(hay).unwrap();
     assert_eq!(im, !fa.is_empty(),
         "is_match={im} find_all.len()={} disagree on 'ba'", fa.len());
-}
-
-#[test]
-fn bug2_rev_fwd_disagreement_no_panic() {
-    // BUG-2: forward scan from reverse-proposed start returns NO_MATCH.
-    // Was assert_ne! at engine.rs:960; must not panic, must return no match.
-    let re = resharp::Regex::new(r".\W*b+").unwrap();
-    assert_eq!(re.find_all(b"ba").unwrap(), vec![] as Vec<resharp::Match>);
-
-    let re2 = resharp::Regex::new(r"\S+b").unwrap();
-    assert_eq!(re2.find_all(b"b_").unwrap(), vec![] as Vec<resharp::Match>);
 }
 
 #[test]
@@ -2482,29 +2386,6 @@ fn bug12_neg_lookahead_class_not_nullable() {
             "pat={pat:?}: expected find_all(\"\")=[], got {ms:?}"
         );
     }
-}
-
-#[test]
-fn bug13_lookahead_zero_width_span() {
-    use resharp::{Match, Regex};
-    let re = Regex::new(r"(?=(?=c)c{1,3})").unwrap();
-    assert_eq!(
-        re.find_all(b"c").unwrap(),
-        vec![Match { start: 0, end: 0 }],
-        "outer lookahead must be zero-width"
-    );
-    assert_eq!(
-        re.find_all(b"cc").unwrap(),
-        vec![Match { start: 0, end: 0 }, Match { start: 1, end: 1 }],
-    );
-    assert_eq!(
-        re.find_all(b"ccc").unwrap(),
-        vec![
-            Match { start: 0, end: 0 },
-            Match { start: 1, end: 1 },
-            Match { start: 2, end: 2 },
-        ],
-    );
 }
 
 #[test]
@@ -2843,39 +2724,22 @@ fn end_anchored_with_leading_lookbehind() {
     assert_eq!(wb.find_all(b"scat").unwrap(), vec![]);
 }
 
-
 #[test]
-fn fwd_prefix_lookahead_not_dropped() {
-    let re = Regex::new("abc(?=[de])").unwrap();
-    assert_eq!(re.find_all(b"abcx").unwrap(), vec![]);
-    assert_eq!(re.find_all(b"abcd").unwrap(), vec![resharp::Match { start: 0, end: 3 }]);
-    assert_eq!(re.find_all(b"abce").unwrap(), vec![resharp::Match { start: 0, end: 3 }]);
+fn bug28_not_word_boundary_drops_consecutive_matches() {
+    for mode in [
+        resharp::UnicodeMode::Ascii,
+        resharp::UnicodeMode::Javascript,
+        resharp::UnicodeMode::Full,
+    ] {
+        let opts = RegexOptions::default().unicode(mode);
+        let re = Regex::with_options(r"\Bx", opts).unwrap();
+        let ms: Vec<[usize; 2]> = re.find_all(b"axx").unwrap().iter().map(|m| [m.start, m.end]).collect();
+        assert_eq!(ms, vec![[1, 2], [2, 3]], "\\Bx on 'axx' mode={mode:?}");
+
+        let re2 = Regex::with_options(r"\B[A-Z]", RegexOptions::default().unicode(mode)).unwrap();
+        let ms2: Vec<[usize; 2]> = re2.find_all(b"README").unwrap().iter().map(|m| [m.start, m.end]).collect();
+        assert_eq!(ms2, vec![[1, 2], [2, 3], [3, 4], [4, 5], [5, 6]], "\\B[A-Z] on 'README' mode={mode:?}");
+    }
 }
 
-#[test]
-fn neg_lookahead_end_anchor() {
-    let re = Regex::new(r"(\n(?!\z))").unwrap();
-    assert_eq!(re.find_all(b"a\n").unwrap(), vec![]);
-    assert_eq!(re.find_all(b"a\nb").unwrap(), vec![resharp::Match { start: 1, end: 2 }]);
-    assert_eq!(re.find_all(b"\n").unwrap(), vec![]);
-    assert_eq!(re.find_all(b"\n\n").unwrap(), vec![resharp::Match { start: 0, end: 1 }]);
-    assert_eq!(re.find_all(b"a\n\n").unwrap(), vec![resharp::Match { start: 1, end: 2 }]);
 
-    let a = Regex::new(r"a(?!\z)").unwrap();
-    assert_eq!(a.find_all(b"a").unwrap(), vec![]);
-    assert_eq!(a.find_all(b"ab").unwrap(), vec![resharp::Match { start: 0, end: 1 }]);
-    assert_eq!(a.find_all(b"a\n").unwrap(), vec![resharp::Match { start: 0, end: 1 }]);
-
-    let nb = Regex::new(r"(?!\A)x").unwrap();
-    assert_eq!(nb.find_all(b"x").unwrap(), vec![]);
-    assert_eq!(nb.find_all(b"xx").unwrap(), vec![resharp::Match { start: 1, end: 2 }]);
-    assert_eq!(nb.find_all(b"ax").unwrap(), vec![resharp::Match { start: 1, end: 2 }]);
-
-    let m = Regex::new(r"(?!\A)(?=[A-Z])").unwrap();
-    assert_eq!(m.find_all(b"aB").unwrap(), vec![resharp::Match { start: 1, end: 1 }]);
-    assert_eq!(m.find_all(b"Ba").unwrap(), vec![]);
-
-    let both = Regex::new(r"(?!\A).(?!\z)").unwrap();
-    assert_eq!(both.find_all(b"abc").unwrap(), vec![resharp::Match { start: 1, end: 2 }]);
-    assert_eq!(both.find_all(b"ab").unwrap(), vec![]);
-}

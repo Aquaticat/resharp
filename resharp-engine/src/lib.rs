@@ -659,6 +659,28 @@ fn first_lb_in_branch(b: &RegexBuilder, node: NodeId) -> Option<NodeId> {
     None
 }
 
+fn lb_is_unbounded(b: &RegexBuilder, lb_node: NodeId) -> bool {
+    let inner = b.get_lookbehind_inner(lb_node);
+    let rest = if inner.is_concat(b) && inner.left(b).is_star(b) {
+        inner.right(b)
+    } else {
+        inner
+    };
+    b.get_min_max_length(rest).1 == u32::MAX
+}
+
+fn any_unbounded_lookback(b: &RegexBuilder, node: NodeId) -> bool {
+    if !node.contains_lookbehind(b) {
+        return false;
+    }
+    if b.get_kind(node) == Kind::Lookbehind && lb_is_unbounded(b, node) {
+        return true;
+    }
+    [node.left(b), node.right(b)]
+        .into_iter()
+        .any(|c| c != NodeId::MISSING && any_unbounded_lookback(b, c))
+}
+
 /// heuristic checks if we can support an union with lookbehinds,
 /// we wont determine which one matched so we require them to be disjoint
 fn union_branches_distinguishable(b: &mut RegexBuilder, union_node: NodeId) -> bool {
@@ -667,6 +689,12 @@ fn union_branches_distinguishable(b: &mut RegexBuilder, union_node: NodeId) -> b
     let any_lb = branches.iter().any(|n| n.contains_lookbehind(b));
     if !any_lb {
         return true;
+    }
+    // lookbehind defers its reverse-pass null emission by its lookback length.
+    if b.get_min_max_length(union_node).1 > 0
+        && branches.iter().any(|&br| any_unbounded_lookback(b, br))
+    {
+        return false;
     }
     // this is outside of formally verified territory, careful with changes
     if b.get_fixed_length(union_node).is_some() {

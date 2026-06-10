@@ -866,3 +866,165 @@ name = "neg_lb_space_a_spaced"
 pattern = '(?<!\s)a'
 input = " a"
 matches = []
+
+[[test]]
+name = "lookaround_commute"
+pattern = '(?=b)(?<=a)'
+input = "ab"
+matches = [[1, 1]]
+
+[[test]]
+name = "lookahead_alt_end_of_line"
+pattern = 'x(?=a|$)'
+input = "xa xb x\nxc x"
+matches = [[0, 1], [6, 7], [11, 12]]
+
+[[test]]
+name = "fwd_prefix_lookahead_not_dropped_no_match"
+pattern = 'abc(?=[de])'
+input = "abcx"
+matches = []
+
+[[test]]
+name = "fwd_prefix_lookahead_not_dropped_d"
+pattern = 'abc(?=[de])'
+input = "abcd"
+matches = [[0, 3]]
+
+[[test]]
+name = "fwd_prefix_lookahead_not_dropped_e"
+pattern = 'abc(?=[de])'
+input = "abce"
+matches = [[0, 3]]
+
+[[test]]
+name = "lookahead_nullable_star_tail_a"
+pattern = '(?=a)_*a'
+input = "a"
+matches = [[0, 1]]
+
+[[test]]
+name = "lookahead_nullable_star_tail_aa"
+pattern = '(?=a)_*a'
+input = "aa"
+matches = [[0, 2]]
+
+[[test]]
+name = "lookahead_nullable_double_star_a"
+pattern = '(?=a)__*a'
+input = "a"
+matches = []
+
+[[test]]
+name = "lookahead_nonspace_star_S"
+pattern = '(?=\S)[\s\S]*\S'
+input = " x"
+matches = [[1, 2]]
+
+[[test]]
+name = "neg_la_end_newline_at_end"
+pattern = '(\n(?!\z))'
+input = "a\n"
+matches = []
+
+[[test]]
+name = "neg_la_end_newline_mid"
+pattern = '(\n(?!\z))'
+input = "a\nb"
+matches = [[1, 2]]
+
+[[test]]
+name = "neg_la_end_sole_newline"
+pattern = '(\n(?!\z))'
+input = "\n"
+matches = []
+
+[[test]]
+name = "neg_la_end_double_newline"
+pattern = '(\n(?!\z))'
+input = "\n\n"
+matches = [[0, 1]]
+
+[[test]]
+name = "neg_la_end_a_double_newline"
+pattern = '(\n(?!\z))'
+input = "a\n\n"
+matches = [[1, 2]]
+
+[[test]]
+name = "neg_la_end_a_alone"
+pattern = 'a(?!\z)'
+input = "a"
+matches = []
+
+[[test]]
+name = "neg_la_end_a_before_b"
+pattern = 'a(?!\z)'
+input = "ab"
+matches = [[0, 1]]
+
+[[test]]
+name = "neg_la_end_a_before_newline"
+pattern = 'a(?!\z)'
+input = "a\n"
+matches = [[0, 1]]
+
+[[test]]
+name = "neg_la_begin_x_sole"
+pattern = '(?!\A)x'
+input = "x"
+matches = []
+
+[[test]]
+name = "neg_la_begin_x_double"
+pattern = '(?!\A)x'
+input = "xx"
+matches = [[1, 2]]
+
+[[test]]
+name = "neg_la_begin_x_after_a"
+pattern = '(?!\A)x'
+input = "ax"
+matches = [[1, 2]]
+
+[[test]]
+name = "neg_la_begin_upper_after_lower"
+pattern = '(?!\A)(?=[A-Z])'
+input = "aB"
+matches = [[1, 1]]
+
+[[test]]
+name = "neg_la_begin_upper_at_start"
+pattern = '(?!\A)(?=[A-Z])'
+input = "Ba"
+matches = []
+
+[[test]]
+name = "neg_la_both_ends_mid"
+pattern = '(?!\A).(?!\z)'
+input = "abc"
+matches = [[1, 2]]
+
+[[test]]
+name = "neg_la_both_ends_short"
+pattern = '(?!\A).(?!\z)'
+input = "ab"
+matches = []
+
+[[test]]
+name = "bug13_nested_lookahead_zero_width_c"
+pattern = '(?=(?=c)c{1,3})'
+input = "c"
+matches = [[0, 0]]
+
+[[test]]
+name = "bug13_nested_lookahead_zero_width_cc"
+pattern = '(?=(?=c)c{1,3})'
+input = "cc"
+matches = [[0, 0], [1, 1]]
+
+[[test]]
+name = "bug13_nested_lookahead_zero_width_ccc"
+pattern = '(?=(?=c)c{1,3})'
+input = "ccc"
+matches = [[0, 0], [1, 1], [2, 2]]

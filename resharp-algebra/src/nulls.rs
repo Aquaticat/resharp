@@ -115,6 +115,16 @@ pub fn has_any_null(
     effects[eid as usize].iter().any(|n| n.mask.has(mask))
 }
 
+#[inline]
+pub fn push_null_desc(nulls: &mut Vec<usize>, v: usize) {
+    let mut j = nulls.len();
+    nulls.push(v);
+    while j > 0 && nulls[j - 1] < v {
+        nulls.swap(j - 1, j);
+        j -= 1;
+    }
+}
+
 #[inline(always)]
 pub fn collect_nulls(
     effects_id: &[u16],
@@ -148,20 +158,10 @@ pub fn collect_nulls(
                 }
             }
             _ => {
-                let start = nulls.len();
                 for n in &effects[eid as usize] {
                     if n.mask.has(mask) {
                         let resolved = pos + n.rel as usize;
-                        #[cfg(debug_assertions)]
-                        if nulls[start..].contains(&resolved) {
-                            let eff = &effects[eid as usize];
-                            panic!(
-                                "unexpected duplicate match position {resolved} from {eff:?}, this is a bug, please file an issue with the pattern",
-                            );
-                        }
-                        if !nulls[start..].contains(&resolved) {
-                            nulls.push(resolved);
-                        }
+                        push_null_desc(nulls, resolved);
                     }
                 }
             }
