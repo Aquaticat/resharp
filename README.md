@@ -3,7 +3,7 @@
 [![crates.io](https://img.shields.io/crates/v/resharp.svg)](https://crates.io/crates/resharp)
 [![docs.rs](https://docs.rs/resharp/badge.svg)](https://docs.rs/resharp)
 
-A high-performance, automata-based regex engine with first-class support for **intersection** (`&`), **complement** (`~`). Non-backtracking with linear-time matching. Shines on complex patterns (large alternations, lookarounds, boolean combinations) where traditional engines degrade or fall back to slower paths.
+A high-performance, automata-based regex engine with first-class support for **intersection** (`&`), **complement** (`~`). Non-backtracking with linear-time matching. Built for complex patterns (large alternations, lookarounds, boolean combinations) that make traditional engines degrade or fall back to slower paths.
 
 [paper](https://dl.acm.org/doi/10.1145/3704837) | [blog post](https://iev.ee/blog/symbolic-derivatives-and-the-rust-rewrite-of-resharp/) | [syntax docs](https://github.com/ieviev/resharp/blob/main/docs/syntax.md) | [dotnet version](https://github.com/ieviev/resharp-dotnet) and [web playground](https://ieviev.github.io/resharp-webapp/)
 
@@ -23,7 +23,7 @@ let matches = re.find_all(b"try Hunter2024 or password1").unwrap();
 
 ## When to use RE# over [`regex`](https://crates.io/crates/regex)
 
-RE# operates on `&[u8]` / UTF-8 and aims to match `regex` crate throughput on standard patterns. Reach for RE# when you need:
+RE# operates on `&[u8]` / UTF-8 and aims to match `regex` crate throughput on standard patterns. Use RE# when you need:
 
 - intersection (`&`), complement (`~`), or lookarounds
 - large alternations with high throughput (at the cost of memory)
@@ -100,9 +100,9 @@ Throughput comparison with `regex` and `fancy-regex`, compiled with `--release`.
 
 **Notes:**
 
-- **Sparse matches (~15 in 900KB)**: roughly tied. Everyone spends most of their time scanning past non-matching bytes in a tiny purpose-built automaton, the DFA size does not matter at all!
-- **Dense matches (~2678 in 944KB)**: the other engines degrade sharply because they must construct more of the lazy state machine. RE# holds at 535 MiB/s vs 58 MiB/s for `regex` on x86.
-- **`(?i)` case-insensitive**: `regex` falls back to a slower engine and drops to 0.01 MiB/s. RE# folds case into the DFA and keeps full speed.
+- **Sparse matches (~15 in 900KB)**: roughly tied. Everyone spends most of their time scanning past non-matching bytes in a tiny purpose-built automaton, so the DFA size barely matters here.
+- **Dense matches (~2678 in 944KB)**: the other engines degrade sharply because they must construct more of the lazy state machine. RE# stays at 535 MiB/s vs 58 MiB/s for `regex` on x86.
+- **`(?i)` case-insensitive**: `regex` falls back to a slower engine and drops to 0.01 MiB/s. RE# folds case into the DFA and stays at full speed.
 - **Lookarounds**: RE# compiles them directly into the automaton. `regex` doesn't support them (except anchors); `fancy-regex` backtracks, which can be orders of magnitude slower.
 - See also the [rebar](https://github.com/ieviev/rebar) comparison: not apples-to-apples (different match semantics, short repeated inputs), but a useful ballpark.
 - Found a pattern where RE# is >5x slower than `regex` or `fancy-regex`? Please [open an issue](https://github.com/ieviev/resharp/issues).
