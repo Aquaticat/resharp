@@ -5,12 +5,12 @@ expected internal representation
 [[test]]
 name = 'not-begins?'
 pattern = '(?!\A)'
-pp = '(&~(\A))'
+pp = '(?=~(\A_*)\z)'
 
 [[test]]
 name = 'not-begins?'
 pattern = '(?!\A)(?=[A-Z])'
-pp = '(&~(\A))(?=[A-Z]_*)'
+pp = '(?=[A-Z]_*){∅}❮(&~(\A_*))❯'
 
 [[test]]
 name = 'lookahead_lift_anchor'

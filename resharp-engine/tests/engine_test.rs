@@ -2851,3 +2851,31 @@ fn fwd_prefix_lookahead_not_dropped() {
     assert_eq!(re.find_all(b"abcd").unwrap(), vec![resharp::Match { start: 0, end: 3 }]);
     assert_eq!(re.find_all(b"abce").unwrap(), vec![resharp::Match { start: 0, end: 3 }]);
 }
+
+#[test]
+fn neg_lookahead_end_anchor() {
+    let re = Regex::new(r"(\n(?!\z))").unwrap();
+    assert_eq!(re.find_all(b"a\n").unwrap(), vec![]);
+    assert_eq!(re.find_all(b"a\nb").unwrap(), vec![resharp::Match { start: 1, end: 2 }]);
+    assert_eq!(re.find_all(b"\n").unwrap(), vec![]);
+    assert_eq!(re.find_all(b"\n\n").unwrap(), vec![resharp::Match { start: 0, end: 1 }]);
+    assert_eq!(re.find_all(b"a\n\n").unwrap(), vec![resharp::Match { start: 1, end: 2 }]);
+
+    let a = Regex::new(r"a(?!\z)").unwrap();
+    assert_eq!(a.find_all(b"a").unwrap(), vec![]);
+    assert_eq!(a.find_all(b"ab").unwrap(), vec![resharp::Match { start: 0, end: 1 }]);
+    assert_eq!(a.find_all(b"a\n").unwrap(), vec![resharp::Match { start: 0, end: 1 }]);
+
+    let nb = Regex::new(r"(?!\A)x").unwrap();
+    assert_eq!(nb.find_all(b"x").unwrap(), vec![]);
+    assert_eq!(nb.find_all(b"xx").unwrap(), vec![resharp::Match { start: 1, end: 2 }]);
+    assert_eq!(nb.find_all(b"ax").unwrap(), vec![resharp::Match { start: 1, end: 2 }]);
+
+    let m = Regex::new(r"(?!\A)(?=[A-Z])").unwrap();
+    assert_eq!(m.find_all(b"aB").unwrap(), vec![resharp::Match { start: 1, end: 1 }]);
+    assert_eq!(m.find_all(b"Ba").unwrap(), vec![]);
+
+    let both = Regex::new(r"(?!\A).(?!\z)").unwrap();
+    assert_eq!(both.find_all(b"abc").unwrap(), vec![resharp::Match { start: 1, end: 2 }]);
+    assert_eq!(both.find_all(b"ab").unwrap(), vec![]);
+}

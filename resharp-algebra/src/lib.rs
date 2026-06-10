@@ -3676,7 +3676,7 @@ impl RegexBuilder {
 
     pub fn mk_neg_lookahead(&mut self, body: NodeId, rel: u32) -> NodeId {
         let (_, p_max) = self.get_min_max_length(body);
-        if p_max == 0 {
+        if p_max == 0 && !self.contains_anchors(body) {
             let not_body = self.mk_compl(body);
             return self.mk_inter(NodeId::EPS, not_body);
         }
