@@ -19,5 +19,6 @@ fn gen_schemas() {
     write_schema::<PrefixFile>("prefix");
     write_schema::<RevNullsFile>("rev_nulls");
     write_schema::<AutoHardenFile>("auto_harden");
+    write_schema::<QuadraticFile>("quadratic");
     write_schema::<DerivFile>("deriv");
 }

@@ -116,6 +116,25 @@ pub struct AutoHardenCase {
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct QuadraticFile {
+    #[serde(default)]
+    pub description: Option<String>,
+    pub test: Vec<QuadraticCase>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QuadraticCase {
+    #[serde(default)]
+    pub name: String,
+    pub pattern: String,
+    pub unit: String,
+    #[serde(default)]
+    pub note: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DerivFile {
     #[serde(default)]
     pub description: Option<String>,

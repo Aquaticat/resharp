@@ -6,20 +6,23 @@ fn fwd_prefix_impl<const IS_MATCH: bool>(
     b: &mut RegexBuilder,
     fixed_length: Option<u32>,
     has_anchors: bool,
+    has_la: bool,
     fwd_prefix: &FwdPrefixSearch,
     input: &[u8],
     matches: &mut Vec<Match>,
 ) -> Result<bool, Error> {
     let prefix_len = fwd_prefix.len();
 
-    if fixed_length == Some(prefix_len as u32) && !has_anchors {
+    let lang_is_prefix_literal = fwd_prefix.is_literal()
+        && fixed_length == Some(prefix_len as u32)
+        && !has_anchors
+        && !has_la;
+    if lang_is_prefix_literal {
         if IS_MATCH {
-            if fwd_prefix.is_literal() {
-                return Ok(fwd_prefix.find_fwd(input, 0).is_some());
-            }
-        } else if fwd_prefix.find_all_literal(input, matches) {
-            return Ok(false);
+            return Ok(fwd_prefix.find_fwd(input, 0).is_some());
         }
+        fwd_prefix.find_all_literal(input, matches);
+        return Ok(false);
     }
 
     let mut search_start = 0;
@@ -163,6 +166,7 @@ impl Regex {
             &mut inner.b,
             self.fixed_length,
             self.has_anchors,
+            self.has_la,
             fwd_prefix,
             input,
             &mut inner.matches,
@@ -182,6 +186,7 @@ impl Regex {
             &mut inner.b,
             self.fixed_length,
             self.has_anchors,
+            self.has_la,
             fwd_prefix,
             input,
             &mut inner.matches,

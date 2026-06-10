@@ -1739,6 +1739,38 @@ mod auto_harden {
     }
 }
 
+mod quadratic {
+    use super::common::schemas::QuadraticFile;
+    use resharp::Regex;
+    use std::path::Path;
+
+    #[test]
+    fn fwd_prefix_disabled_toml() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("quadratic.toml");
+        let content = std::fs::read_to_string(&path).unwrap();
+        let file: QuadraticFile = toml::from_str(&content).unwrap();
+        assert!(!file.test.is_empty());
+        for tc in file.test {
+            let re = Regex::new(&tc.pattern)
+                .unwrap_or_else(|e| panic!("{}: compile failed: {e:?}", tc.name));
+            assert!(
+                !re.has_fwd_prefix(),
+                "{}: pattern {:?} selected a forward prefix; AnchoredFwd verify is O(n^2) here (unit={:?})",
+                tc.name,
+                tc.pattern,
+                tc.unit
+            );
+            assert!(
+                !tc.unit.is_empty(),
+                "{}: missing worst-case construction unit",
+                tc.name
+            );
+        }
+    }
+}
+
 mod hardened_regressions {
     #[test]
     fn hardened_always_nullable_empty_matches() {
@@ -2795,3 +2827,27 @@ fn end_anchored_alternation_hoist() {
     assert_eq!(re.find_all(b"notes").unwrap(), vec![resharp::Match { start: 3, end: 5 }]);
 }
 
+#[test]
+fn end_anchored_with_leading_lookbehind() {
+    let re = Regex::with_options(r"\b(Ant[o\xc2\xba]?[.]?[o\xc2\xba]?)\z", RegexOptions::default().multiline(false)).unwrap();
+    assert_eq!(re.find_all_kind_name(), "EndAnchored");
+    assert_eq!(re.find_all(b"x Anto").unwrap(), vec![resharp::Match { start: 2, end: 6 }]);
+    assert_eq!(re.find_all(b"xAnto").unwrap(), vec![]);
+    assert_eq!(re.find_all(b"Ant.").unwrap(), vec![resharp::Match { start: 0, end: 4 }]);
+    assert_eq!(re.find_all(b"foo Ant").unwrap(), vec![resharp::Match { start: 4, end: 7 }]);
+    assert_eq!(re.find_all(b"foo Anto bar").unwrap(), vec![]);
+
+    let wb = Regex::with_options(r"\bcat\z", RegexOptions::default().multiline(false)).unwrap();
+    assert_eq!(wb.find_all_kind_name(), "EndAnchored");
+    assert_eq!(wb.find_all(b"a cat").unwrap(), vec![resharp::Match { start: 2, end: 5 }]);
+    assert_eq!(wb.find_all(b"scat").unwrap(), vec![]);
+}
+
+
+#[test]
+fn fwd_prefix_lookahead_not_dropped() {
+    let re = Regex::new("abc(?=[de])").unwrap();
+    assert_eq!(re.find_all(b"abcx").unwrap(), vec![]);
+    assert_eq!(re.find_all(b"abcd").unwrap(), vec![resharp::Match { start: 0, end: 3 }]);
+    assert_eq!(re.find_all(b"abce").unwrap(), vec![resharp::Match { start: 0, end: 3 }]);
+}

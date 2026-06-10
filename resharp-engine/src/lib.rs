@@ -312,6 +312,7 @@ pub struct Regex {
     pub(crate) fwd_lb_body_nullable: bool,
     pub(crate) has_anchors: bool,
     pub(crate) has_lb: bool,
+    pub(crate) has_la: bool,
     pub(crate) find_all: FindAll,
     pub(crate) stream_cache: stream::StreamCache,
 }
@@ -1021,7 +1022,7 @@ impl Regex {
         let rev_trivial = b.nullability(ts_rev_start) == Nullability::ALWAYS;
         let has_look = b.contains_look(node);
         let rev_node = b.reverse(node)?;
-        let rev_end_anchored = b.is_begin_anchored(rev_node) && !has_look && !fwd_end_nullable;
+        let rev_end_anchored = b.is_begin_anchored(rev_node) && !fwd_end_nullable;
         let fixed_length = b.get_fixed_length(node);
         let (min_len, max_len) = b.get_min_max_length(node);
         let max_length = if max_len != u32::MAX {
@@ -1136,6 +1137,7 @@ impl Regex {
         };
         let has_anchors = b.contains_anchors(node);
         let has_lb = b.contains_lookbehind(node);
+        let has_la = node.contains_lookahead(&b);
 
         let hardened = if opts.hardened && !has_bounded && fixed_length.is_none() && max_cap >= 64 {
             fwd.has_nonnullable_cycle(&mut b, 256)
@@ -1194,6 +1196,7 @@ impl Regex {
             fwd_lb_body_nullable,
             has_anchors,
             has_lb,
+            has_la,
             stream_cache: Default::default(),
         })
     }

@@ -1,0 +1,15 @@
+description = '''
+patterns whose find_all is O(n^2), seeing if they get flagged
+'''
+
+[[test]]
+name = "extract_from"
+pattern = 'EXTRACT\s*([^)]*FROM\s+[^)]+)'
+unit = 'EXTRACT x '
+note = ''''''
+
+[[test]]
+name = "op_pushdata"
+pattern = 'OP_PUSHDATA[^\s]+ [^\s]+'
+unit = 'OP_PUSHDATA'
+note = ''''''
