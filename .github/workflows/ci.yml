@@ -1,0 +1,67 @@
+name: ci
+
+# third-party actions are pinned to commit SHAs (supply-chain hardening);
+# the trailing comment names the pinned tag or branch. the dtolnay pins are
+# channel branches: the channel is baked into the pinned action.yml and
+# rustup resolves it at run time, so the Rust version itself is not frozen.
+# cargo-fuzz is version-pinned so this job stays reproducible; bump both
+# deliberately.
+
+on: [push, pull_request, workflow_dispatch]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        # macos-latest is arm64, so the NEON SIMD paths get exercised;
+        # ubuntu-latest covers AVX2.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      # the dev/test profile keeps debug_assertions on, so the engine's
+      # internal debug_assert! guards fail loudly here instead of being
+      # compiled out.
+      - run: cargo test --workspace
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      # warnings stay advisory (no -D warnings); deny-by-default lints
+      # (correctness class) still fail the job.
+      - run: cargo clippy --workspace --all-targets
+
+  fuzz-replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: dtolnay/rust-toolchain@5b842231ba77f5c045dba54ac5560fed2db780e2 # nightly branch
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: fuzz
+      - run: cargo install cargo-fuzz --version 0.13.2 --locked
+      # deterministic: builds every target and replays only the committed
+      # seed corpus (-runs=0 executes the corpus without random search), so
+      # this job is reproducible and stays green unless a committed seed
+      # regresses. random-search fuzzing lives in fuzz-nightly.yml, where a
+      # red run means a found bug rather than a broken push. targets are
+      # enumerated with `cargo fuzz list` so new targets are covered the
+      # moment they land; every target is attempted even if an earlier one
+      # fails, and the job fails at the end if any did.
+      - run: |
+          failed=0
+          for target in $(cargo +nightly fuzz list); do
+            cargo +nightly fuzz run "$target" -- -runs=0 || failed=1
+          done
+          exit "$failed"
+        working-directory: fuzz
