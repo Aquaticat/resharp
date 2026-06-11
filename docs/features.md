@@ -5,8 +5,8 @@
 The crate deliberately accepts a superset of the patterns the RE#
 formalization (and the .NET `resharp-dotnet` engine) supports. The gatekeeper
 is `ensure_supported_rec` (`resharp-engine/src/lib.rs`): where the .NET engine
-rejects a construct class at compile, this crate accepts some of those shapes
-to unlock practical patterns, e.g.:
+rejects a whole class of constructs at compile time, this crate accepts some
+of those shapes to unlock practical patterns, e.g.:
 
 - lookarounds inside a union, when the union's branches are distinguishable
   (otherwise `UnsupportedPattern`);
