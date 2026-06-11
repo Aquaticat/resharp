@@ -19,6 +19,23 @@ Input is `&[u8]`. Matches are byte offsets `[start, end)`.
 pub struct Match { pub start: usize, pub end: usize }
 ```
 
+### How the APIs agree
+
+The matching APIs answer different questions about one language, so their
+answers are mutually constrained. These are the documented invariants (the
+`match_invariants` fuzz target asserts them):
+
+- `is_match` is true exactly when `find_all` is non-empty.
+- `find_anchored = Some` implies `is_match`; the returned span starts at 0 and
+  is the longest match there.
+- `find_all` returns leftmost-longest, non-overlapping matches in order.
+- `stream` returns leftmost-**shortest** matches (see Streaming below), so its
+  spans differ from `find_all` in general; `stream` is empty exactly when
+  `find_all` is empty, and when every match is zero-width the two enumerations
+  coincide (shortest and longest are the same span).
+- `hardened(true)` changes the scan algorithm and its complexity guarantee,
+  never the result: default and hardened return identical matches.
+
 ## RegexOptions
 
 ```rust
