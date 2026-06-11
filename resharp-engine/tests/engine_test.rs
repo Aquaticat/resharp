@@ -2365,31 +2365,28 @@ fn bug10_default_and_hardened_find_all_agree() {
 }
 
 #[test]
-fn findall_lb_prefix_keeps_offset1_zero_width() {
+fn find_all_lb_prefix_keeps_offset1_zero_width() {
     // The prefix-accelerated leading-lookbehind find_all driver
     // (fwd_lb_prefix_impl) dropped the offset-1 zero-width match right after a
     // leading zero-width begin match. `^$` over "\n\n" (three empty lines)
     // matches at 0:0, 1:1, 2:2, but the SIMD-on (prefix-built) path returned
     // [0:0, 2:2]; the scalar fallback and hardened path were already correct.
     let hay: &[u8] = b"\n\n";
+    let spans = |re: &resharp::Regex| -> Vec<(usize, usize)> {
+        re.find_all(hay)
+            .unwrap()
+            .iter()
+            .map(|m| (m.start, m.end))
+            .collect()
+    };
     let def = resharp::Regex::new("^$").unwrap();
     let hard = resharp::Regex::with_options(
         "^$",
         resharp::RegexOptions::default().hardened(true),
     )
     .unwrap();
-    let def_spans: Vec<(usize, usize)> = def
-        .find_all(hay)
-        .unwrap()
-        .iter()
-        .map(|m| (m.start, m.end))
-        .collect();
-    let hard_spans: Vec<(usize, usize)> = hard
-        .find_all(hay)
-        .unwrap()
-        .iter()
-        .map(|m| (m.start, m.end))
-        .collect();
+    let def_spans = spans(&def);
+    let hard_spans = spans(&hard);
     assert_eq!(
         def_spans,
         vec![(0, 0), (1, 1), (2, 2)],
