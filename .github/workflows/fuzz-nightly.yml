@@ -4,6 +4,8 @@ name: fuzz-nightly
 # here means libFuzzer found a real input (the crash artifact is uploaded),
 # not that a push broke the build. while known crashers are open this will
 # fail by design; that is the job doing its work.
+#
+# action and cargo-fuzz pinning policy: see the comment in ci.yml.
 on:
   schedule:
     - cron: "17 4 * * *"
@@ -16,12 +18,12 @@ jobs:
   fuzz:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@nightly
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: dtolnay/rust-toolchain@5b842231ba77f5c045dba54ac5560fed2db780e2 # nightly branch
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fuzz
-      - run: cargo install cargo-fuzz --locked
+      - run: cargo install cargo-fuzz --version 0.13.2 --locked
       # targets are enumerated with `cargo fuzz list` so new targets are
       # covered the moment they land; every target runs even if an earlier
       # one finds a crash, and the job fails if any did.
@@ -32,7 +34,7 @@ jobs:
           done
           exit "$failed"
         working-directory: fuzz
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
           name: fuzz-artifacts
