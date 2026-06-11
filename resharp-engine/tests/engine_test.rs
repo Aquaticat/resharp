@@ -2776,4 +2776,178 @@ fn bug28_not_word_boundary_drops_consecutive_matches() {
     }
 }
 
+#[test]
+fn wb_leading_optional_nonword_no_silent_miscompile() {
+    let r1 = Regex::new(r"\b(`?\w+)\.(\w+)\b");
+    assert!(
+        matches!(r1.as_ref(), Err(Error::Algebra(resharp_algebra::ResharpError::UnsupportedPattern))),
+        "leading-optional-nonword \\b needs general-wb support; must fail loud, got ok={}",
+        r1.is_ok()
+    );
+    let r2 = Regex::new(r"\b(\w+`?)\.(\w+)\b").unwrap();
+    let inp = b"a.b foo.bar";
+    let got: Vec<String> = r2.find_all(inp).unwrap().iter()
+        .map(|m| String::from_utf8_lossy(&inp[m.start..m.end]).into_owned()).collect();
+    assert_eq!(got, vec!["a.b", "foo.bar"]);
+}
 
+#[test]
+fn empty_match_byte_offsets_vs_utf8_intersection() {
+    let body = r"((([A-Za-z]+(-[\dA-Za-z]+){0,2})|\*)(;q=[01](\.\d+)?)?)*";
+    let inp = "Bootstrap\u{2019}s form".as_bytes();
+
+    let raw = Regex::new(body).unwrap();
+    let got: Vec<[usize;2]> = raw.find_all(inp).unwrap().iter().map(|m|[m.start,m.end]).collect();
+    assert_eq!(got, vec![[0,9],[9,9],[10,10],[11,11],[12,13],[13,13],[14,18],[18,18]]);
+
+    let aligned = Regex::new(&format!(r"({body})&\p{{utf8}}*")).unwrap();
+    let got: Vec<[usize;2]> = aligned.find_all(inp).unwrap().iter().map(|m|[m.start,m.end]).collect();
+    assert_eq!(got, vec![[0,9],[9,9],[10,10],[11,11],[12,13],[13,13],[14,18],[18,18]]);
+}
+
+#[test]
+fn repro_bug03_stream_phantom_zerowidth() {
+    for (p, inp) in [
+        (r"(?=c)", "c"),
+        (r"\b", "ab"),
+        (r"(?!\A)", "ab"),
+        (r"^{0}", "b"),
+        (r"(?<=b)", "b"),
+        (r"(?<=b+){2}", "b"),
+    ] {
+        let re = Regex::new(p).unwrap();
+        let fa: Vec<[usize;2]> = re.find_all(inp.as_bytes()).unwrap().iter().map(|m|[m.start,m.end]).collect();
+        let st: Vec<[usize;2]> = re.stream(inp.as_bytes()).unwrap().iter().map(|m|[m.start,m.end]).collect();
+        assert_eq!(st, fa, "stream must match find_all for zero-width {p} on {inp}");
+    }
+}
+
+#[test]
+fn repro_bug04_reentrant_union_rewrite_panic() {
+    for p in [
+        r"(.*.+)*.+",
+        r"(0*.{3}b{0,2})+",
+        r"(.{0,2}.{2,}[a-c]{3}\W*)*\w{2}.*",
+        r".*(.+)*.+",
+        r"(.*.*)*.*",
+        r"(.+.*)+.+",
+        r".*|.*(.+)*.+",
+    ] {
+        if let Ok(re) = Regex::new(p) {
+            let _ = re.find_all(b"aaa").unwrap();
+        }
+    }
+    let re = Regex::new(r"(.*.+)*.+").unwrap();
+    let got: Vec<[usize; 2]> = re
+        .find_all(b"aaa")
+        .unwrap()
+        .iter()
+        .map(|m| [m.start, m.end])
+        .collect();
+    assert_eq!(got, vec![[0, 3]]);
+}
+
+#[test]
+fn repro_armbug01_simd_findall_offset1_zerowidth() {
+    for (p, inp, want) in [
+        (r"^$", "\n\n", vec![[0,0],[1,1],[2,2]]),
+        (r"^\x00?", "\n\x06.\n\x00", vec![[0,0],[1,1],[4,5]]),
+    ] {
+        let re = Regex::new(p).unwrap();
+        let got: Vec<[usize;2]> = re.find_all(inp.as_bytes()).unwrap().iter().map(|m|[m.start,m.end]).collect();
+        assert_eq!(got, want, "{p} on {inp:?}");
+    }
+}
+
+#[test]
+fn repro_bug02_findanchored_phantom() {
+    for (p, inp, want) in [
+        (r"(?<=a)", "b", None),
+        (r"(?<=a)b", "b", None),
+        (r"\BU", "U", None),
+        (r"(?<!x)a", "a", Some([0usize, 1])),
+        (r"\bword", "word here", Some([0, 4])),
+        (r"\Bx", "axx", None),
+        (r"\Bx", "xx", None),
+        (r"(?<=a)b", "ab", None),
+    ] {
+        let re = Regex::new(p).unwrap();
+        let im = re.is_match(inp.as_bytes()).unwrap();
+        let fan = re.find_anchored(inp.as_bytes()).unwrap();
+        let got = fan.map(|m| [m.start, m.end]);
+        assert_eq!(got, want, "find_anchored wrong for {p} on {inp}");
+        assert_eq!(im, fan.is_some() || re.find_all(inp.as_bytes()).unwrap().iter().any(|m| m.start > 0),
+            "is_match/find_anchored consistency for {p} on {inp}");
+    }
+}
+
+
+
+#[test]
+fn repro_bug05_rev_trivial_assert() {
+    let m = |s: usize, e: usize| resharp::Match { start: s, end: e };
+    let cases: &[(&str, &[u8], Vec<resharp::Match>)] = &[
+        (r"_*$", b"\n\xfe*\xfe_*", vec![m(0, 6), m(6, 6)]),
+        (r"_*$", b"abc", vec![m(0, 3), m(3, 3)]),
+        (r"_*$", b"", vec![m(0, 0)]),
+        (r"_*(?!_)", b"aa", vec![m(0, 2), m(2, 2)]),
+    ];
+    for (p, hay, want) in cases {
+        let re = Regex::new(p).unwrap();
+        assert_eq!(re.find_all_kind_name(), "Dfa", "pattern {p:?} routing changed");
+        assert_eq!(
+            &re.find_all(hay).unwrap(),
+            want,
+            "rev_trivial find_all wrong for {p:?} on {hay:?}"
+        );
+    }
+}
+#[test]
+fn bug05_rev_trivial_vs_regex_crate_oracle() {
+    let cases: &[(&str, &str)] = &[
+        (r"_*$", r"(?s).*$"),
+        (r".*$", r".*$"),
+        (r"[a-z]*$", r"[a-z]*$"),
+        (r"\w*$", r"\w*$"),
+        (r"[0-9]*$", r"[0-9]*$"),
+    ];
+    let hays: &[&[u8]] = &[
+        b"", b"a", b"abc", b"a\nb", b"\n\n", b"aXb\ncd", b"123\n456\n", b"\n",
+        b"aaaa", b"a\nb\nc\n", b"zz\nzz", b"\xfe\x00\xff", b"abc\ndef",
+        b"\n\xfe*\xfe_*", b"hello world\nfoo bar baz\n",
+    ];
+    for (p, rx) in cases {
+        let re = Regex::new(p).unwrap();
+        let oracle = regex::bytes::RegexBuilder::new(rx)
+            .unicode(false)
+            .multi_line(true)
+            .build()
+            .unwrap();
+        for hay in hays {
+            let got: Vec<[usize; 2]> = re
+                .find_all(hay)
+                .unwrap()
+                .iter()
+                .map(|m| [m.start, m.end])
+                .collect();
+            let want: Vec<[usize; 2]> =
+                oracle.find_iter(hay).map(|m| [m.start(), m.end()]).collect();
+            let mut prev_end: Option<usize> = None;
+            let got_no_adj_empty: Vec<[usize; 2]> = got
+                .iter()
+                .copied()
+                .filter(|m| {
+                    let keep = !(m[0] == m[1] && Some(m[0]) == prev_end);
+                    prev_end = Some(m[1]);
+                    keep
+                })
+                .collect();
+            assert_eq!(
+                got_no_adj_empty, want,
+                "rev_trivial find_all diverges from regex crate for {p:?} on {hay:?} \
+                 (got={got:?}, kind={})",
+                re.find_all_kind_name()
+            );
+        }
+    }
+}

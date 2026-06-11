@@ -1839,11 +1839,13 @@ impl RegexBuilder {
             Kind::Concat => {
                 let lhs = node_id.left(self);
                 let rhs = node_id.right(self);
-                if lhs.is_pred_star(self).is_some() {
+                if let Some(pred) = lhs.is_pred_star(self) {
                     if let Some(opttail) = rhs.is_opt_v(self) {
                         let (_, max) = self.get_min_max_length(node_id);
                         if max <= u32::MAX {
-                            if let Some(true) = self.subsumes(lhs, opttail) {
+                            let c = pred.pred_tset(self);
+                            // structural; der-based subsumes here is non-terminating mid-construction
+                            if self.lang_subset_pred_star(c, opttail) {
                                 return Some(lhs);
                             }
                         }
@@ -1911,6 +1913,60 @@ impl RegexBuilder {
             }
             _ => false,
         }
+    }
+
+    fn lang_subset_pred_star(&mut self, c: TSetId, node: NodeId) -> bool {
+        let mut memo: FxHashMap<NodeId, bool> = FxHashMap::default();
+        self.lang_subset_pred_star_rec(c, node, &mut memo)
+    }
+
+    fn lang_subset_pred_star_rec(
+        &mut self,
+        c: TSetId,
+        node: NodeId,
+        memo: &mut FxHashMap<NodeId, bool>,
+    ) -> bool {
+        if node == NodeId::EPS || node == NodeId::BOT {
+            return true;
+        }
+        if node == NodeId::TS {
+            return self.solver().is_full_id(c);
+        }
+        if let Some(&v) = memo.get(&node) {
+            return v;
+        }
+        let result = match self.get_kind(node) {
+            Kind::Pred => {
+                let p = node.pred_tset(self);
+                let nc = self.solver().not_id(c);
+                let d = self.solver().and_id(p, nc);
+                self.solver().is_empty_id(d)
+            }
+            Kind::Star => {
+                let body = node.left(self);
+                self.lang_subset_pred_star_rec(c, body, memo)
+            }
+            Kind::Concat | Kind::Union => {
+                let l = node.left(self);
+                let r = node.right(self);
+                self.lang_subset_pred_star_rec(c, l, memo)
+                    && self.lang_subset_pred_star_rec(c, r, memo)
+            }
+            Kind::Inter => {
+                let l = node.left(self);
+                let r = node.right(self);
+                self.lang_subset_pred_star_rec(c, l, memo)
+                    || self.lang_subset_pred_star_rec(c, r, memo)
+            }
+            Kind::Begin
+            | Kind::End
+            | Kind::Compl
+            | Kind::Lookbehind
+            | Kind::Lookahead
+            | Kind::Ordered => false,
+        };
+        memo.insert(node, result);
+        result
     }
 
     pub fn num_nodes(&self) -> u32 {

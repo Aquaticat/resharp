@@ -1418,13 +1418,15 @@ impl<'s> ResharpParser<'s> {
                     MaybeWord => {
                         match Self::concat_neighbor_kind(&c.asts, edge, dir) {
                             Word => Word,
-                            _ => MaybeWord,
+                            Edge => MaybeWord,
+                            _ => Unknown,
                         }
                     }
                     MaybeNonWord => {
                         match Self::concat_neighbor_kind(&c.asts, edge, dir) {
                             NonWord => NonWord,
-                            _ => MaybeNonWord,
+                            Edge => MaybeNonWord,
+                            _ => Unknown,
                         }
                     }
                     other => other,

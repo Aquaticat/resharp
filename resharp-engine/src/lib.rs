@@ -296,7 +296,6 @@ pub struct Regex {
     #[allow(dead_code)]
     pub(crate) rev_end_anchored: bool,
     /// rev = _*, skip rev pass entirely
-    pub(crate) rev_trivial: bool,
     pub(crate) initial_nullability: Nullability,
     pub(crate) fwd_end_nullable: bool,
     // unfinished experimental optimizations, will not put these in yet
@@ -1047,7 +1046,6 @@ impl Regex {
         };
         let lb_stripped = fwd_start != body_after_begin;
         let fwd_begin_anchored = b.is_begin_anchored(node) && !lb_stripped;
-        let rev_trivial = b.nullability(ts_rev_start) == Nullability::ALWAYS;
         let has_look = b.contains_look(node);
         let rev_node = b.reverse(node)?;
         let rev_end_anchored = b.is_begin_anchored(rev_node) && !fwd_end_nullable;
@@ -1213,7 +1211,6 @@ impl Regex {
             is_empty_lang,
             fwd_begin_anchored,
             rev_end_anchored,
-            rev_trivial,
             initial_nullability,
             fwd_end_nullable,
             hardened,
@@ -1820,9 +1817,7 @@ impl Regex {
             }
             return Ok(matches.clone());
         }
-        if self.rev_trivial && !self.hardened {
-            debug_assert!(false,"found bug: this path should be eliminated");
-        }
+
         if self.initial_nullability.has(Nullability::END) {
             inner.nulls.push(input.len());
         }
@@ -1896,15 +1891,10 @@ impl Regex {
                 Ok(None)
             };
         }
-        let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        
-        if self.has_lb && !self.rev_trivial && !self.always_nullable {
-            // may be inefficient but.. why would you pass a lookbehind to an anchored method
-            let first = inner.fwd_ts.scan_fwd_first_null_from(&mut inner.b, ldfa::DFA_INITIAL as u32, 0, input)?;
-            if first.2 {
-                return Ok(None);
-            }
+        if (self.has_lb || self.has_anchors) && self.find_all != FindAll::Anchored {
+            return Ok(self.find_all(input)?.into_iter().next().filter(|m| m.start == 0));
         }
+        let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
         Ok(inner.fwd.scan_fwd_slow(&mut inner.b, 0, input)?.map(|end| Match { start: 0, end }))
     }
 

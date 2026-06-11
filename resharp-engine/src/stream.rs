@@ -211,9 +211,10 @@ impl Regex {
             }
             _ => {}
         }
+        let begin_nullable = self.initial_nullability.has(Nullability::BEGIN);
         let fwd_prefix = self.stream_cache.fwd_prefix.get().unwrap().as_ref();
         let inner = &mut *self.inner.lock().unwrap();
-        stream_general::<true, STOP, _>(inner, fwd_prefix, input, |s, e| {
+        stream_general::<true, STOP, _>(inner, fwd_prefix, begin_nullable, input, |s, e| {
             on_match(Match { start: s, end: e })
         })
     }
@@ -232,7 +233,7 @@ fn try_emit_step<const REV: bool, F: FnMut(usize, usize)>(
     if !ldfa::has_any_null(&dfa.effects_id, &dfa.effects, state, mask) {
         return Ok(false);
     }
-    let mut match_end = 0usize;
+    let mut match_end = ldfa::NO_MATCH;
     ldfa::collect_max_fwd(
         &dfa.effects_id,
         &dfa.effects,
@@ -241,7 +242,7 @@ fn try_emit_step<const REV: bool, F: FnMut(usize, usize)>(
         mask,
         &mut match_end,
     );
-    let match_end = if match_end == 0 { pos } else { match_end };
+    let match_end = if match_end == ldfa::NO_MATCH { pos } else { match_end };
     let m_start = if REV {
         let rev = inner.rev.as_mut().unwrap();
         let s = rev.scan_rev_from(&mut inner.b, match_end, *last_match_end, input)?;
@@ -257,14 +258,14 @@ fn try_emit_step<const REV: bool, F: FnMut(usize, usize)>(
 fn stream_general<const REV: bool, const STOP: bool, F: FnMut(usize, usize)>(
     inner: &mut crate::RegexInner,
     fwd_prefix: Option<&accel::FwdPrefixSearch>,
+    begin_nullable: bool,
     input: &[u8],
     mut emit: F,
 ) -> Result<(), Error> {
     let end = input.len();
     let mut last_match_end = 0usize;
 
-    // begin step
-    if inner.fwd_ts.initial_nullability.has(Nullability::BEGIN) {
+    if begin_nullable {
         emit(0, 0);
         if STOP {
             return Ok(());
@@ -273,7 +274,7 @@ fn stream_general<const REV: bool, const STOP: bool, F: FnMut(usize, usize)>(
             inner,
             fwd_prefix,
             input,
-            1,
+            0,
             ldfa::DFA_INITIAL as u32,
             &mut last_match_end,
             &mut emit,
@@ -434,9 +435,10 @@ impl Regex {
             }
             _ => {}
         }
+        let begin_nullable = self.initial_nullability.has(Nullability::BEGIN);
         let fwd_prefix = self.stream_cache.fwd_prefix.get().unwrap().as_ref();
         let inner = &mut *self.inner.lock().unwrap();
-        stream_general::<false, false, _>(inner, fwd_prefix, input, |_, e| on_match(e))
+        stream_general::<false, false, _>(inner, fwd_prefix, begin_nullable, input, |_, e| on_match(e))
     }
 }
 
