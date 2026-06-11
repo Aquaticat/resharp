@@ -22,8 +22,10 @@ pub struct Match { pub start: usize, pub end: usize }
 ### How the APIs agree
 
 The matching APIs answer different questions about one language, so their
-answers are mutually constrained. These are the documented invariants (the
-`match_invariants` fuzz target asserts them):
+answers are mutually constrained. These are the documented invariants; the
+`match_invariants` fuzz target asserts the `find_all` ordering, the
+`is_match` agreement, and the anchored-at-0 part today, with the rest stated
+here as the contract the remaining checks (and fixes) converge on:
 
 - `is_match` is true exactly when `find_all` is non-empty.
 - `find_anchored = Some` implies `is_match`; the returned span starts at 0 and
