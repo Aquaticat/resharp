@@ -71,7 +71,7 @@ pub use prefix::calc_prefix_sets;
 #[cfg(feature = "diag")]
 pub use prefix::PrefixSets;
 #[cfg(feature = "diag")]
-pub use simd::force_scalar;
+pub use simd::{force_scalar_scope, ForceScalarGuard};
 pub(crate) use resharp_algebra::nulls::Nullability;
 pub(crate) use resharp_algebra::solver::TSetId;
 use resharp_algebra::Kind;
