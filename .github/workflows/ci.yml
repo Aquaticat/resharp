@@ -34,7 +34,7 @@ jobs:
       # (correctness class) still fail the job.
       - run: cargo clippy --workspace --all-targets
 
-  fuzz-smoke:
+  fuzz-replay:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -43,10 +43,13 @@ jobs:
         with:
           workspaces: fuzz
       - run: cargo install cargo-fuzz --locked
-      # a short deterministic-budget run per target: catches build rot and
-      # shallow regressions; the committed seed-* corpus keeps it reproducible.
+      # deterministic: builds every target and replays only the committed
+      # seed corpus (-runs=0 executes the corpus without random search), so
+      # this job is reproducible and stays green unless a committed seed
+      # regresses. random-search fuzzing lives in fuzz-nightly.yml, where a
+      # red run means a found bug rather than a broken push.
       - run: |
           for target in compile diff_regex match_invariants; do
-            cargo +nightly fuzz run "$target" -- -max_total_time=30
+            cargo +nightly fuzz run "$target" -- -runs=0
           done
         working-directory: fuzz
