@@ -1,5 +1,29 @@
 # Features
 
+## Patterns beyond the RE# fragment
+
+The crate deliberately accepts a superset of the patterns the RE#
+formalization (and the .NET `resharp-dotnet` engine) supports. The gatekeeper
+is `ensure_supported_rec` (`resharp-engine/src/lib.rs`): where the .NET engine
+rejects a whole class of constructs at compile time, this crate accepts some
+of those shapes to unlock practical patterns, e.g.:
+
+- lookarounds inside a union, when the union's branches are distinguishable
+  (otherwise `UnsupportedPattern`);
+- a lookbehind-carrying union under an intersection, handled by eagerly
+  distributing `(A|B) & C` to `(A&C)|(B&C)`, which unlocks patterns like
+  `(^abc|def)&.*`.
+
+Two practical consequences:
+
+- A pattern compiling here is not evidence it is inside the formally verified
+  RE# fragment; portability to other RE# implementations is not implied.
+- The accepted-superset region is newer and has less formal backing than the
+  core fragment; recent fuzzing found most of its soundness issues exactly
+  there. If you need maximum confidence, staying inside the fragment (no
+  lookaround-in-union, no anchors under complement) is the conservative
+  choice.
+
 ## Hardened mode
 
 Guarantees **linear matching for all patterns and all match-collecting APIs** (`find_all`, etc.) in O(N·S), where N is input length and S is DFA states. The default engine is linear on the vast majority of patterns but can go quadratic on `find_all` when a pattern produces dense reverse-scan candidates. Hardened mode rules that out unconditionally.
