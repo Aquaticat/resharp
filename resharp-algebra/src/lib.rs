@@ -1842,7 +1842,7 @@ impl RegexBuilder {
                 if let Some(pred) = lhs.is_pred_star(self) {
                     if let Some(opttail) = rhs.is_opt_v(self) {
                         let (_, max) = self.get_min_max_length(node_id);
-                        if max <= u32::MAX {
+                        if max < u32::MAX {
                             let c = pred.pred_tset(self);
                             // structural; der-based subsumes here is non-terminating mid-construction
                             if self.lang_subset_pred_star(c, opttail) {
