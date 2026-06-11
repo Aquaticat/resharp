@@ -120,7 +120,7 @@ fn fwd_lb_prefix_impl<const IS_MATCH: bool>(
                     return Ok(true);
                 }
             }
-            search_start = if max_end == 0 { 1 } else { max_end };
+            search_start = if max_end == 0 { 0 } else { max_end };
         }
     }
 
