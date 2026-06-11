@@ -120,7 +120,12 @@ fn fwd_lb_prefix_impl<const IS_MATCH: bool>(
                     return Ok(true);
                 }
             }
-            search_start = if max_end == 0 { 0 } else { max_end };
+            // Resume the candidate search at the begin match's end. After a
+            // zero-width begin match this restarts at 0, which cannot re-emit
+            // the begin match: a candidate at byte c produces a body match at
+            // c + lb_len, and lb_len >= 1, so candidate 0 yields the body
+            // position lb_len, not a rescan of position 0.
+            search_start = max_end;
         }
     }
 
