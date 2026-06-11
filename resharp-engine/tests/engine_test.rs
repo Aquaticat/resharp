@@ -295,6 +295,36 @@ fn literal_alt_suffix_is_match() {
 }
 
 #[test]
+fn stream_matches_find_all_for_zero_rep_group_intersection() {
+    for (pat, hay) in [
+        (r"(?<=b)&(a){0}", &b"b"[..]),
+        (r"(?<=b)&^{0}", &b"b"[..]),
+        (r"((?<=b+){2}&(\n{2,}\w{1,3}){0}^{0})", &b"b"[..]),
+    ] {
+        let re = Regex::new(pat).unwrap();
+        let fa: Vec<[usize; 2]> = re.find_all(hay).unwrap().iter().map(|m| [m.start, m.end]).collect();
+        let st: Vec<[usize; 2]> = re.stream(hay).unwrap().iter().map(|m| [m.start, m.end]).collect();
+        assert_eq!(st, fa, "stream vs find_all diverge for {pat:?} on {hay:?}");
+    }
+}
+
+#[test]
+fn hardened_zero_width_interior_null_matches_default() {
+    for (pat, hay) in [
+        (r"~(\A|\n+){2}", &b"\n\n"[..]),
+        (r"[\x00-\x10]*(Z){2,}|(?!_{0}\A{3} {0,2}){3}", &b"\n\n"[..]),
+    ] {
+        let def = Regex::new(pat).unwrap();
+        let hard = Regex::with_options(pat, RegexOptions::default().hardened(true)).unwrap();
+        assert_eq!(
+            def.find_all(hay).unwrap(),
+            hard.find_all(hay).unwrap(),
+            "default vs hardened find_all diverge for {pat:?} on {hay:?}"
+        );
+    }
+}
+
+#[test]
 fn intersect_narrow_with_widened_term_is_sound() {
     for pat in ["foo&_*bar_*", "foo&.*bar.*"] {
         let re = Regex::with_options(pat, RegexOptions::default()).unwrap();
@@ -2039,38 +2069,6 @@ fn long_dot_union_does_not_match_short_haystack() {
     assert!(!regex.is_match(haystack.as_bytes()).unwrap());
 }
 
-// #[test]
-// #[ignore = "catalogue of known-unsupported patterns to handle later"]
-// fn known_unsupported_patterns_reject() {
-//     let unsupported = [
-//         r"-?[A-z.\-]+\b",
-//         r"\A[^\n\r]+\b[^\n\r]+\z",
-//         r"[a-z]*\b",
-//         r"[a-z.]+\b",
-//         r"\s*//[^\n\r]*\z(?<!,)",
-//         r"\b(?:af|an|of|il)\z\b",
-//         r"(?<!\A\s*)[ \t](?!\s*\z)",
-//         r"(?<!ab)x",
-//         r"(?<!\(.*[^)]),",
-//         r"((?!ab).)*",
-//         r"\A((?!\.(test|mock)\.).)*\z",
-//         r"^.*(a|^b)",
-//         r".*(a|^b)",
-//         r"\A[a-z(]{1,3}\b",
-//         r"a(?!b).*(?<!a)b",
-//     ];
-//     let mut wrong = vec![];
-//     for p in unsupported {
-//         if Regex::new(p).is_ok() {
-//             wrong.push(p);
-//         }
-//     }
-//     assert!(
-//         wrong.is_empty(),
-//         "these must reject, not compile: {wrong:?}"
-//     );
-// }
-
 #[test]
 fn wb_after_mixed_word_nonword_class_not_silently_wrong() {
     for p in [r"-?[A-z.\-]+\b", r"[a-z.]+\b", r"[A-z]+\b"] {
@@ -2366,11 +2364,7 @@ fn bug10_default_and_hardened_find_all_agree() {
 
 #[test]
 fn find_all_lb_prefix_keeps_offset1_zero_width() {
-    // The prefix-accelerated leading-lookbehind find_all driver
-    // (fwd_lb_prefix_impl) dropped the offset-1 zero-width match right after a
-    // leading zero-width begin match. `^$` over "\n\n" (three empty lines)
-    // matches at 0:0, 1:1, 2:2, but the SIMD-on (prefix-built) path returned
-    // [0:0, 2:2]; the scalar fallback and hardened path were already correct.
+    // regression: prefix-accelerated lb driver dropped the offset-1 zero-width match after a leading zero-width begin match.
     let hay: &[u8] = b"\n\n";
     let spans = |re: &resharp::Regex| -> Vec<(usize, usize)> {
         re.find_all(hay)
@@ -2491,26 +2485,6 @@ fn bug27_word_boundary_nullable_composition() {
     assert_eq!(re.is_match(b"").unwrap(), false, r"\ba{{0}}\b on empty: expected false");
     let re = resharp::Regex::new(r"\Ba{0}\z").unwrap();
     assert_eq!(re.is_match(b"").unwrap(), true, r"\Ba{{0}}\z on empty: expected true");
-}
-
-#[test]
-fn bug23_full_unicode_w_bounded_repeat_compile_time() {
-    // TODO: currently working as intended
-    // there is an option to bake it in but i would not touch it 
-    // it matters you can always serialize the compiled regex and load
-
-    // let full = || resharp::RegexOptions::default().unicode(resharp::UnicodeMode::Full);
-    // let re = resharp::Regex::with_options(r"\w{3}", full()).unwrap();
-    // assert_eq!(re.is_match(b"abc").unwrap(), true);
-    // assert_eq!(re.is_match(b"ab").unwrap(), false);
-    // // compile-time must not blow up
-    // let t = std::time::Instant::now();
-    // let _ = resharp::Regex::with_options(r"\w{8}", full()).unwrap();
-    // that pattern with all optimizations enabled, in the future maybe reinvestigate
-    // assert!(
-    //     elapsed < 1.0,
-    //     "\\w{{8}} full-unicode compile took {elapsed:.3}s (O(n^1.6) regression)"
-    // );
 }
 
 #[test]
@@ -2678,24 +2652,6 @@ fn nested_unbounded_lookaround_anchor_limit() {
         "expected anchor limit error, got: {err:?}"
     );
 }
-
-// #[test]
-// fn bug_nested_unbounded_lookaround_oom() {
-//     // let opts = RegexOptions::default().unicode(resharp::UnicodeMode::Javascript);
-//     let opts = RegexOptions::default().unicode(resharp::UnicodeMode::Default);
-//     let re = Regex::with_options(NESTED_LOOKAROUND_PAT, opts).expect("compile");
-//     let hay = basket_haystack();
-//     let (tx, rx) = std::sync::mpsc::channel();
-//     std::thread::spawn(move || {
-//         let _ = tx.send(re.find_all(&hay).is_ok());
-//     });
-//     match rx.recv_timeout(std::time::Duration::from_secs(5)) {
-//         Ok(_) => {}
-//         Err(_) => panic!(
-//             "find_all did not return within 5s on a 92KB haystack: unbounded memory growth (engine bug)"
-//         ),
-//     }
-// }
 
 #[test]
 fn begin_anchored_lookahead_short_circuits() {

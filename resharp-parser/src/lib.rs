@@ -1370,11 +1370,7 @@ impl<'s> ResharpParser<'s> {
                         }
                     };
                     if negated {
-                        // Negate the byte class, not the whole language: `~(pos)`
-                        // (mk_compl) includes the empty string and every non-class
-                        // substring, so `\D`/`\S`/`\W` wrongly become nullable and
-                        // match "". neg_class negates within the single byte, as
-                        // the js branch above does.
+                        // negate within the byte, not the language, or `\D`/`\S`/`\W` wrongly match "".
                         resharp_algebra::neg_class(tb, pos)
                     } else {
                         pos

@@ -3905,6 +3905,23 @@ impl RegexBuilder {
         self.init(key)
     }
 
+    fn eps_inter_look(&self, left_id: NodeId, right_id: NodeId) -> Option<NodeId> {
+        let other = if left_id.is_eps() {
+            right_id
+        } else if right_id.is_eps() {
+            left_id
+        } else {
+            return None;
+        };
+        if other.is_lookbehind(self) {
+            return Some(other);
+        }
+        if other.is_lookahead(self) && self.get_lookahead_rel(other) == 0 {
+            return Some(other);
+        }
+        None
+    }
+
     fn mk_unset(&mut self, kind: Kind) -> NodeId {
         let node = NodeKey {
             kind,
@@ -4441,6 +4458,15 @@ impl RegexBuilder {
                     .iter()
                     .rev()
                     .fold(NodeId::BOT, |acc, &p| self.mk_union(p, acc))
+            }
+            Kind::Inter => {
+                let l = self.simplify_fwd_initial_rec(node_id.left(self), memo);
+                let r = self.simplify_fwd_initial_rec(node_id.right(self), memo);
+                if let Some(look) = self.eps_inter_look(l, r) {
+                    look
+                } else {
+                    self.mk_inter(l, r)
+                }
             }
             Kind::Concat => {
                 let l = self.simplify_fwd_initial_rec(node_id.left(self), memo);

@@ -1,15 +1,4 @@
-// differential: the SIMD-prefilter-accelerated find_all drivers vs the scalar
-// paths. the override must cover the whole scalar side, not just
-// construction: prefix acceleration is decided while the Regex is built
-// (build_fwd_prefix returns None when has_simd() is false), and the lazy DFA
-// also consults has_simd() per newly built state DURING the scan
-// (try_build_skip_simd in ldfa.rs), so the force_scalar_scope() guard is held
-// through find_all and restores the previous state on drop.
-//
-// this is the oracle that catches prefilter-driver soundness bugs the SIMD
-// intrinsic unit tests cannot see, e.g. `^$` over "\n\n" returning
-// [0:0, 2:2] from the accelerated driver while the scalar path returns the
-// correct [0:0, 1:1, 2:2].
+// differential: SIMD-prefilter-accelerated find_all vs the scalar path.
 
 #![no_main]
 
@@ -27,15 +16,9 @@ fuzz_target!(|input: (&str, &[u8])| {
     let accel_result = accel.find_all(haystack);
 
     let scalar_result = {
-        // the guard restores the previous override state on every exit path,
-        // including assertion unwinds.
         let _scalar_scope = force_scalar_scope();
         match Regex::new(pattern) {
-            // both construction and the scan run under the override; lazy DFA
-            // states built mid-scan must also take the scalar path.
             Ok(re) => re.find_all(haystack),
-            // both sides parsed the same pattern; compile must not depend on
-            // the override.
             Err(e) => panic!(
                 "scalar compile failed after accel compile succeeded: {e:?} pattern={pattern:?}"
             ),

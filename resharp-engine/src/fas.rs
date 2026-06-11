@@ -522,11 +522,12 @@ impl LDFA {
         for entries in regs.iter_mut() {
             entries.drain_to_max(&linker, &mut max);
         }
-        if !ALWAYS_NULLABLE
-            && nulls.first().copied() == Some(data_end)
-            && max[data_end] < data_end
-        {
-            max[data_end] = data_end;
+        if !ALWAYS_NULLABLE {
+            for &i in nulls.iter() {
+                if max[i] < i {
+                    max[i] = i;
+                }
+            }
         }
         let mut skip_until = 0usize;
         let mut emit = |i: usize, e: usize, skip_until: &mut usize| {
@@ -542,7 +543,7 @@ impl LDFA {
             }
         } else {
             for &i in nulls.iter().rev() {
-                if i < skip_until || (i != 0 && max[i] == 0) {
+                if i < skip_until {
                     continue;
                 }
                 emit(i, max[i], &mut skip_until);
