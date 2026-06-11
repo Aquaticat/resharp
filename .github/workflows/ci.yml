@@ -1,0 +1,52 @@
+name: ci
+
+on: [push, pull_request, workflow_dispatch]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        # macos-latest is arm64, so the NEON SIMD paths get exercised;
+        # ubuntu-latest covers AVX2.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # the dev/test profile keeps debug_assertions on, so the engine's
+      # internal debug_assert! guards fail loudly here instead of being
+      # compiled out.
+      - run: cargo test --workspace
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # warnings stay advisory (no -D warnings); deny-by-default lints
+      # (correctness class) still fail the job.
+      - run: cargo clippy --workspace --all-targets
+
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - run: cargo install cargo-fuzz --locked
+      # a short deterministic-budget run per target: catches build rot and
+      # shallow regressions; the committed seed-* corpus keeps it reproducible.
+      - run: |
+          for target in compile diff_regex match_invariants; do
+            cargo +nightly fuzz run "$target" -- -max_total_time=30
+          done
+        working-directory: fuzz
