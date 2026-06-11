@@ -3,8 +3,27 @@ pub use resharp_algebra::solver::TSet;
 mod byte_freq;
 pub use byte_freq::BYTE_FREQ;
 
+// forces every has_simd() dispatch site to report no SIMD, so the scalar
+// fallbacks (and the non-prefilter find_all drivers, since build_fwd_prefix
+// bails when has_simd() is false) become reachable for differential testing.
+#[cfg(feature = "diag")]
+static FORCE_SCALAR: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Force (or stop forcing) the scalar fallback at every SIMD dispatch site.
+/// Diagnostic hook for differential tests and fuzz targets; set it before
+/// building the `Regex` under test, since prefix acceleration is chosen at
+/// build time.
+#[cfg(feature = "diag")]
+pub fn force_scalar(force: bool) {
+    FORCE_SCALAR.store(force, core::sync::atomic::Ordering::Relaxed);
+}
+
 #[inline]
 pub fn has_simd() -> bool {
+    #[cfg(feature = "diag")]
+    if FORCE_SCALAR.load(core::sync::atomic::Ordering::Relaxed) {
+        return false;
+    }
     #[cfg(target_arch = "x86_64")]
     {
         std::arch::is_x86_feature_detected!("avx2")

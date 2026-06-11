@@ -11,7 +11,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }
 arbitrary = { version = "1", features = ["derive"] }
-resharp = { path = "../resharp-engine" }
+resharp = { path = "../resharp-engine", features = ["diag"] }
 # differential oracle for `diff_regex`; resharp already uses the regex crate as
 # a dev-dependency for its own comparison tests / benches.
 regex = "1"
@@ -33,6 +33,12 @@ path = "fuzz_targets/match_invariants.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "simd_diff"
+path = "fuzz_targets/simd_diff.rs"
+test = false
+doc = false
 
 [[bin]]
 name = "diff_regex"
