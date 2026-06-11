@@ -3,8 +3,49 @@ pub use resharp_algebra::solver::TSet;
 mod byte_freq;
 pub use byte_freq::BYTE_FREQ;
 
+// forces every has_simd() dispatch site to report no SIMD, so the scalar
+// fallbacks (and the non-prefilter find_all drivers, since build_fwd_prefix
+// bails when has_simd() is false) become reachable for differential testing.
+// SeqCst makes the override predictably visible across threads (its cost is
+// irrelevant for a diagnostic feature). needs byte atomics
+// (target_has_atomic = "8"); diag is a dev-host diagnostics feature, so
+// no-atomics targets are out of scope by construction.
+#[cfg(feature = "diag")]
+static FORCE_SCALAR: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Scoped scalar override: while the returned guard is alive, every SIMD
+/// dispatch site reports no SIMD. Diagnostic hook for differential tests and
+/// fuzz targets. Hold the guard across both `Regex` construction (prefix
+/// acceleration is chosen at build time) and the scan itself (the lazy DFA
+/// consults `has_simd()` per newly built state).
+#[cfg(feature = "diag")]
+pub fn force_scalar_scope() -> ForceScalarGuard {
+    ForceScalarGuard {
+        prev: FORCE_SCALAR.swap(true, core::sync::atomic::Ordering::SeqCst),
+    }
+}
+
+/// Guard returned by [`force_scalar_scope`]. Dropping it restores the
+/// previous override state, so scopes nest and panics/early returns cannot
+/// leave the override stuck on.
+#[cfg(feature = "diag")]
+pub struct ForceScalarGuard {
+    prev: bool,
+}
+
+#[cfg(feature = "diag")]
+impl Drop for ForceScalarGuard {
+    fn drop(&mut self) {
+        FORCE_SCALAR.store(self.prev, core::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 #[inline]
 pub fn has_simd() -> bool {
+    #[cfg(feature = "diag")]
+    if FORCE_SCALAR.load(core::sync::atomic::Ordering::SeqCst) {
+        return false;
+    }
     #[cfg(target_arch = "x86_64")]
     {
         std::arch::is_x86_feature_detected!("avx2")
