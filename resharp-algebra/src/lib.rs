@@ -1841,11 +1841,12 @@ impl RegexBuilder {
                 let rhs = node_id.right(self);
                 if lhs.is_pred_star(self).is_some() {
                     if let Some(opttail) = rhs.is_opt_v(self) {
-                        let (_, max) = self.get_min_max_length(node_id);
-                        if max <= u32::MAX {
-                            if let Some(true) = self.subsumes(lhs, opttail) {
-                                return Some(lhs);
-                            }
+                        // Previously gated on `max <= u32::MAX` for the concat's
+                        // max length, which is always true (and the lhs star
+                        // makes that max the unbounded sentinel unconditionally),
+                        // so the comparison was a no-op.
+                        if let Some(true) = self.subsumes(lhs, opttail) {
+                            return Some(lhs);
                         }
                     }
                 }
