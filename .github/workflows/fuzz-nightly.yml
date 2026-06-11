@@ -14,10 +14,6 @@ env:
 
 jobs:
   fuzz:
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [compile, diff_regex, match_invariants]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -26,11 +22,19 @@ jobs:
         with:
           workspaces: fuzz
       - run: cargo install cargo-fuzz --locked
-      - run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=600
+      # targets are enumerated with `cargo fuzz list` so new targets are
+      # covered the moment they land; every target runs even if an earlier
+      # one finds a crash, and the job fails if any did.
+      - run: |
+          failed=0
+          for target in $(cargo +nightly fuzz list); do
+            cargo +nightly fuzz run "$target" -- -max_total_time=600 || failed=1
+          done
+          exit "$failed"
         working-directory: fuzz
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: fuzz-artifacts-${{ matrix.target }}
-          path: fuzz/artifacts/${{ matrix.target }}/
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
           if-no-files-found: ignore

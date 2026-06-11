@@ -47,9 +47,11 @@ jobs:
       # seed corpus (-runs=0 executes the corpus without random search), so
       # this job is reproducible and stays green unless a committed seed
       # regresses. random-search fuzzing lives in fuzz-nightly.yml, where a
-      # red run means a found bug rather than a broken push.
+      # red run means a found bug rather than a broken push. targets are
+      # enumerated with `cargo fuzz list` so new targets are covered the
+      # moment they land.
       - run: |
-          for target in compile diff_regex match_invariants; do
+          for target in $(cargo +nightly fuzz list); do
             cargo +nightly fuzz run "$target" -- -runs=0
           done
         working-directory: fuzz
